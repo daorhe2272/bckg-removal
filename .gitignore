@@ -1,5 +1,7 @@
 models/
 .cursor/
 
+__pycache__
+
 OVERVIEW.md
 TASKS.md
