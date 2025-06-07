@@ -160,23 +160,26 @@ class TestModelLoading:
                             mock_error.assert_called_once()
                             mock_info.assert_called_once_with("🔍 Modelo no encontrado localmente. Intentando descargar desde Azure...")
 
+    @patch('app.MODEL_PATH', 'models/production/u2net.onnx')
     @patch('os.path.exists', return_value=True)
     @patch('onnxruntime.InferenceSession')
     def test_load_model_success(self, mock_session, mock_exists):
         mock_session_instance = Mock()
         mock_session.return_value = mock_session_instance
         
-        result = load_model()
+        with patch('streamlit.info'), patch('streamlit.success'):
+            result = load_model()
         
         assert result == mock_session_instance
         mock_session.assert_called_once_with("models/production/u2net.onnx")
     
+    @patch('app.MODEL_PATH', 'models/production/u2net.onnx')
     @patch('os.path.exists', return_value=True)
     @patch('onnxruntime.InferenceSession')
     def test_load_model_exception(self, mock_session, mock_exists):
         mock_session.side_effect = Exception("Model loading failed")
         
-        with patch('streamlit.error') as mock_error:
+        with patch('streamlit.info'), patch('streamlit.error') as mock_error:
             result = load_model()
             
             assert result is None
@@ -424,13 +427,16 @@ class TestAzureIntegration:
                 assert result is False
                 mock_error.assert_called_with("❌ Error al descargar el modelo: Azure connection failed")
     
+    @patch('app.MODEL_PATH', None)
+    @patch('app.get_latest_model_path')
     @patch('os.path.exists')
     @patch('app.download_model_from_azure')
     @patch('onnxruntime.InferenceSession')
-    def test_load_model_with_azure_download_success(self, mock_session, mock_download, mock_exists):
+    def test_load_model_with_azure_download_success(self, mock_session, mock_download, mock_exists, mock_get_latest):
         # First call returns False (no local model), subsequent calls return True (after download)
         mock_exists.side_effect = [False, True]
         mock_download.return_value = True
+        mock_get_latest.return_value = 'models/production/u2net.onnx'
         
         mock_session_instance = Mock()
         mock_session.return_value = mock_session_instance
