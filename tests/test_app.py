@@ -15,9 +15,13 @@ from app import (
     postprocess_mask,
     apply_mask_to_image,
     process_image,
+<<<<<<< HEAD
     image_to_bytes,
     get_azure_config,
     download_model_from_azure
+=======
+    image_to_bytes
+>>>>>>> fc3e837df921f55ea9644ffe816b3c911777986a
 )
 
 class TestImagePreprocessing:
@@ -150,6 +154,7 @@ class TestModelLoading:
     
     def test_load_model_file_not_exists(self):
         with patch('os.path.exists', return_value=False):
+<<<<<<< HEAD
             with patch('app.download_model_from_azure', return_value=False):
                 with patch('streamlit.error') as mock_error:
                     with patch('streamlit.info') as mock_info:
@@ -159,6 +164,15 @@ class TestModelLoading:
                             assert result is None
                             mock_error.assert_called_once()
                             mock_info.assert_called_once_with("🔍 Modelo no encontrado localmente. Intentando descargar desde Azure...")
+=======
+            with patch('streamlit.error') as mock_error:
+                with patch('streamlit.info') as mock_info:
+                    result = load_model()
+                    
+                    assert result is None
+                    mock_error.assert_called_once()
+                    mock_info.assert_called_once()
+>>>>>>> fc3e837df921f55ea9644ffe816b3c911777986a
     
     @patch('os.path.exists', return_value=True)
     @patch('onnxruntime.InferenceSession')
@@ -309,6 +323,7 @@ class TestPerformance:
         assert (end_time - start_time) < 1.0
 
 
+<<<<<<< HEAD
 class TestAzureIntegration:
     """Test Azure Blob Storage integration functionality"""
     
@@ -432,5 +447,7 @@ class TestAzureIntegration:
                     mock_error.assert_called_with("❌ No se pudo obtener el modelo desde Azure Blob Storage")
 
 
+=======
+>>>>>>> fc3e837df921f55ea9644ffe816b3c911777986a
 if __name__ == "__main__":
     pytest.main([__file__]) 
