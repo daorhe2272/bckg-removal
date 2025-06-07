@@ -11,18 +11,13 @@ sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '
 
 
 class TestStreamlitComponents:
-    
+
     @patch('streamlit.error')
     @patch('streamlit.info')
-<<<<<<< HEAD
     @patch('streamlit.markdown')
     @patch('app.download_model_from_azure', return_value=False)
     @patch('os.path.exists', return_value=False)
     def test_model_loading_error_display(self, mock_exists, mock_download, mock_markdown, mock_info, mock_error):
-=======
-    @patch('os.path.exists', return_value=False)
-    def test_model_loading_error_display(self, mock_exists, mock_info, mock_error):
->>>>>>> fc3e837df921f55ea9644ffe816b3c911777986a
         from app import load_model
         
         result = load_model()

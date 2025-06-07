@@ -22,7 +22,6 @@ COPY src/ ./src/
 COPY tests/ ./tests/
 COPY pytest.ini .
 COPY run_tests.py .
-COPY models/ ./models/
 
 ENTRYPOINT ["python", "run_tests.py"]
 
@@ -31,7 +30,6 @@ FROM base as production
 
 COPY src/app.py .
 COPY src/.streamlit/ ./.streamlit/
-COPY models/ ./models/
 
 EXPOSE 8501
 

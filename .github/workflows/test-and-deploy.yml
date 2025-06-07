@@ -2,7 +2,7 @@ name: Test and Deploy
 
 on:
   push:
-    branches: [ prod ]
+    branches: [ prod, dev ]
   pull_request:
     branches: [ prod ]
   workflow_dispatch:
@@ -71,6 +71,7 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         context: .
+        target: production
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
