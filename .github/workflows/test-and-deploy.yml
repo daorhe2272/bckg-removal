@@ -36,7 +36,7 @@ jobs:
         
     - name: Run test suite
       run: |
-        python run_tests.py --coverage --verbose
+        python run_tests.py --coverage
         
   build_and_push:
     needs: test
