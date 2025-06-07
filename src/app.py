@@ -1,11 +1,17 @@
 import os
 import io
 import cv2
+import glob
 import numpy as np
 import streamlit as st
 import onnxruntime as ort
 
 from PIL import Image
+from dotenv import load_dotenv
+from azure.storage.blob import BlobServiceClient
+from azure.identity import DefaultAzureCredential
+
+load_dotenv()
 
 st.set_page_config(
     page_title="Herramienta de Eliminación de Fondo",
@@ -13,20 +19,165 @@ st.set_page_config(
     layout="wide"
 )
 
-MODEL_PATH = "models/production/u2net.onnx"
+def get_latest_model_path():
+    production_dir = "models/production/"
+    onnx_files = glob.glob(os.path.join(production_dir, "*.onnx"))
+    
+    if not onnx_files:
+        return None
+    
+    latest_file = max(onnx_files, key=os.path.getmtime)
+    return latest_file
+
+MODEL_PATH = get_latest_model_path()
+
+def get_azure_config():
+    config = {
+        'storage_account_name': os.getenv('AZURE_STORAGE_ACCOUNT_NAME'),
+        'client_id': os.getenv('AZURE_CLIENT_ID'),
+        'client_secret': os.getenv('AZURE_CLIENT_SECRET'),
+        'tenant_id': os.getenv('AZURE_TENANT_ID'),
+        'container_name': 'models'
+    }
+    return config
+
+def download_model_from_azure(status_placeholder=None):
+    if status_placeholder is None:
+        status_container = st.container()
+        status_placeholder = status_container.empty()
+    
+    try:
+        config = get_azure_config()
+        
+        required_credentials = [
+            config['storage_account_name'],
+            config['client_id'],
+            config['client_secret'],
+            config['tenant_id']
+        ]
+        
+        if not all(required_credentials):
+            with status_placeholder.container():
+                st.warning("⚠️ Credenciales de Azure incompletas.")
+                st.info("Asegúrate de configurar todas las variables de entorno del Service Principal.")
+            return False
+        
+        with status_placeholder.container():
+            st.info(f"🔗 Conectando a Azure Storage: {config['storage_account_name']}")
+        
+        account_url = f"https://{config['storage_account_name']}.blob.core.windows.net"
+        credential = DefaultAzureCredential()
+        blob_service_client = BlobServiceClient(account_url=account_url, credential=credential)
+        
+        container_client = blob_service_client.get_container_client(config['container_name'])
+        
+        with status_placeholder.container():
+            st.info(f"📁 Verificando acceso al contenedor: {config['container_name']}")
+        
+        try:
+            container_properties = container_client.get_container_properties()
+            with status_placeholder.container():
+                st.success(f"✅ Acceso al contenedor confirmado")
+        except Exception as container_error:
+            with status_placeholder.container():
+                st.error(f"❌ Error al acceder al contenedor '{config['container_name']}': {str(container_error)}")
+            return False
+        
+        with status_placeholder.container():
+            st.info("🔍 Buscando archivos en Azure Blob Storage...")
+            
+        with st.spinner("Procesando archivos..."):
+            all_blobs = list(container_client.list_blobs())
+            
+            onnx_blobs = []
+            production_blobs = []
+            
+            for blob in container_client.list_blobs(name_starts_with="production/"):
+                production_blobs.append(blob.name)
+                if blob.name.endswith('.onnx'):
+                    onnx_blobs.append(blob)
+            
+            with status_placeholder.container():
+                if onnx_blobs:
+                    st.info(f"📁 Encontrado {len(onnx_blobs)} modelo(s) en production/")
+                    latest_name = max(onnx_blobs, key=lambda x: x.last_modified).name
+                    st.text(f"  ✓ Más reciente: {latest_name}")
+                else:
+                    st.info(f"📊 Buscando en {len(all_blobs)} archivos del contenedor...")
+            
+            if not onnx_blobs:
+                with status_placeholder.container():
+                    st.error("❌ No se encontraron archivos .onnx en la ruta production/")
+                    st.info("💡 Verifica que los archivos .onnx estén subidos en la ruta correcta")
+                return False
+            
+            latest_blob = max(onnx_blobs, key=lambda x: x.last_modified)
+            blob_name = latest_blob.name
+            
+            with status_placeholder.container():
+                st.info(f"📥 Descargando: {os.path.basename(blob_name)}")
+        
+        os.makedirs("models/production", exist_ok=True)
+        download_path = os.path.join("models/production", os.path.basename(blob_name))
+        
+        with st.spinner("📥 Descargando modelo..."):
+            blob_client = blob_service_client.get_blob_client(container=config['container_name'], blob=blob_name)
+            
+            with open(download_path, "wb") as download_file:
+                download_file.write(blob_client.download_blob().readall())
+            
+            with status_placeholder.container():
+                st.success(f"✅ Modelo descargado: {os.path.basename(blob_name)}")
+            return True
+            
+    except Exception as e:
+        with status_placeholder.container():
+            st.error(f"❌ Error al descargar el modelo: {str(e)}")
+            with st.expander("🔍 Ver detalles del error"):
+                import traceback
+                st.code(traceback.format_exc())
+        return False
 
 @st.cache_resource
 def load_model():
-    if not os.path.exists(MODEL_PATH):
-        st.error(f"Modelo U2-Net no encontrado en {MODEL_PATH}")
-        st.info("Asegúrate de que el archivo del modelo existe en el directorio models/production/")
-        return None
+    status_container = st.container()
+    status_placeholder = status_container.empty()
+    
+    model_path = MODEL_PATH
+    
+    if model_path is None or not os.path.exists(model_path):
+        with status_placeholder.container():
+            st.info("🔍 Modelo no encontrado localmente. Intentando descargar desde Azure...")
+        
+        if not download_model_from_azure(status_placeholder):
+            with status_placeholder.container():
+                st.error("❌ No se pudo obtener el modelo desde Azure Blob Storage")
+                st.markdown("""
+                **📋 Verifica la configuración:**
+                - Las variables de entorno de Azure estén configuradas correctamente
+                - El Service Principal tenga permisos de lectura en el Blob Storage  
+                - El modelo existe en la ruta especificada en Azure
+                """)
+            return None
+        
+        model_path = get_latest_model_path()
+        
+        if model_path is None:
+            with status_placeholder.container():
+                st.error("❌ No se encontró el modelo después de la descarga")
+            return None
+    else:
+        with status_placeholder.container():
+            st.info(f"🔍 Cargando modelo local: {os.path.basename(model_path)}")
     
     try:
-        session = ort.InferenceSession(MODEL_PATH)
+        session = ort.InferenceSession(model_path)
+        with status_placeholder.container():
+            st.success("🎯 Modelo cargado exitosamente!")
         return session
     except Exception as e:
-        st.error(f"Error al cargar el modelo: {str(e)}")
+        with status_placeholder.container():
+            st.error(f"❌ Error al cargar el modelo: {str(e)}")
         return None
 
 def preprocess_image(image: Image.Image) -> np.ndarray:
@@ -74,6 +225,37 @@ def image_to_bytes(image: Image.Image) -> bytes:
 st.title("🖼️ Herramienta de Eliminación de Fondo")
 st.markdown("Sube una imagen para eliminar su fondo automáticamente usando IA")
 
+with st.sidebar:
+    st.header("⚙️ Configuración")
+    config = get_azure_config()
+    
+    azure_configured = all([
+        config['storage_account_name'],
+        config['client_id'],
+        config['client_secret'], 
+        config['tenant_id']
+    ])
+    
+    if azure_configured:
+        st.success("✅ Azure Storage configurado")
+        with st.expander("Ver detalles de configuración"):
+            st.code(f"""
+Storage Account: {config['storage_account_name']}
+Container: {config['container_name']}
+Model Search Path: production/*.onnx (latest)
+Client ID: {config['client_id'][:6]}***
+Tenant ID: {config['tenant_id'][:6]}***
+            """)
+    else:
+        st.warning("⚠️ Azure Storage no configurado completamente")
+        st.info("Variables de entorno requeridas para Service Principal:")
+        st.code("""
+AZURE_STORAGE_ACCOUNT_NAME
+AZURE_CLIENT_ID
+AZURE_CLIENT_SECRET  
+AZURE_TENANT_ID
+        """)
+
 session = load_model()
 
 if session is None:
@@ -95,13 +277,27 @@ with col1:
         original_image = Image.open(uploaded_file)
         st.image(original_image, use_column_width=True)
         
-        file_details = {
-            "Nombre de archivo": uploaded_file.name,
-            "Tamaño de archivo": f"{uploaded_file.size / 1024:.1f} KB",
-            "Tamaño de imagen": f"{original_image.size[0]} × {original_image.size[1]} px"
-        }
+        st.subheader("📋 Detalles de la Imagen")
         
-        st.json(file_details)
+        detail_col1, detail_col2, detail_col3 = st.columns(3)
+        
+        with detail_col1:
+            st.metric(
+                label="📄 Archivo",
+                value=uploaded_file.name
+            )
+        
+        with detail_col2:
+            st.metric(
+                label="💾 Tamaño",
+                value=f"{uploaded_file.size / 1024:.1f} KB"
+            )
+        
+        with detail_col3:
+            st.metric(
+                label="📐 Dimensiones",
+                value=f"{original_image.size[0]} × {original_image.size[1]} px"
+            )
 
 with col2:
     st.header("✨ Imagen Procesada")

@@ -15,7 +15,9 @@ from app import (
     postprocess_mask,
     apply_mask_to_image,
     process_image,
-    image_to_bytes
+    image_to_bytes,
+    get_azure_config,
+    download_model_from_azure
 )
 
 class TestImagePreprocessing:
@@ -148,13 +150,15 @@ class TestModelLoading:
     
     def test_load_model_file_not_exists(self):
         with patch('os.path.exists', return_value=False):
-            with patch('streamlit.error') as mock_error:
-                with patch('streamlit.info') as mock_info:
-                    result = load_model()
-                    
-                    assert result is None
-                    mock_error.assert_called_once()
-                    mock_info.assert_called_once()
+            with patch('app.download_model_from_azure', return_value=False):
+                with patch('streamlit.error') as mock_error:
+                    with patch('streamlit.info') as mock_info:
+                        with patch('streamlit.markdown') as mock_markdown:
+                            result = load_model()
+                            
+                            assert result is None
+                            mock_error.assert_called_once()
+                            mock_info.assert_called_once_with("🔍 Modelo no encontrado localmente. Intentando descargar desde Azure...")
     
     @patch('os.path.exists', return_value=True)
     @patch('onnxruntime.InferenceSession')
@@ -303,6 +307,129 @@ class TestPerformance:
         
         assert result.shape == (1080, 1920)
         assert (end_time - start_time) < 1.0
+
+
+class TestAzureIntegration:
+    """Test Azure Blob Storage integration functionality"""
+    
+    def test_get_azure_config_with_env_vars(self):
+        with patch.dict(os.environ, {
+            'AZURE_STORAGE_ACCOUNT_NAME': 'test_storage',
+            'MODEL_BLOB_PATH': 'models/test/model.onnx'
+        }):
+            config = get_azure_config()
+            
+            assert config['storage_account_name'] == 'test_storage'
+            assert config['model_blob_path'] == 'models/test/model.onnx'
+            assert config['container_name'] == 'models'
+    
+    def test_get_azure_config_default_values(self):
+        with patch.dict(os.environ, {}, clear=True):
+            config = get_azure_config()
+            
+            assert config['storage_account_name'] is None
+            assert config['model_blob_path'] == 'models/production/u2net.onnx'
+            assert config['container_name'] == 'models'
+    
+    def test_download_model_no_storage_account(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with patch('streamlit.warning') as mock_warning:
+                result = download_model_from_azure()
+                
+                assert result is False
+                mock_warning.assert_called_with("⚠️ Azure Storage no configurado.")
+    
+    @patch('app.DefaultAzureCredential')
+    @patch('app.BlobServiceClient')
+    @patch('os.makedirs')
+    def test_download_model_success(self, mock_makedirs, mock_blob_service, mock_credential):
+        # Setup mocks
+        mock_blob_client = Mock()
+        mock_blob_client.exists.return_value = True
+        mock_blob_client.download_blob.return_value.readall.return_value = b'fake model data'
+        
+        mock_blob_service_instance = Mock()
+        mock_blob_service_instance.get_blob_client.return_value = mock_blob_client
+        mock_blob_service.return_value = mock_blob_service_instance
+        
+        with patch.dict(os.environ, {'AZURE_STORAGE_ACCOUNT_NAME': 'test_storage'}):
+            with patch('streamlit.spinner'), patch('streamlit.success') as mock_success:
+                with patch('builtins.open', create=True) as mock_open:
+                    mock_file = Mock()
+                    mock_open.return_value.__enter__.return_value = mock_file
+                    
+                    result = download_model_from_azure()
+                    
+                    assert result is True
+                    mock_success.assert_called_with("✅ Modelo descargado exitosamente desde Azure!")
+                    mock_file.write.assert_called_with(b'fake model data')
+    
+    @patch('app.DefaultAzureCredential')
+    @patch('app.BlobServiceClient')
+    def test_download_model_blob_not_exists(self, mock_blob_service, mock_credential):
+        # Setup mocks
+        mock_blob_client = Mock()
+        mock_blob_client.exists.return_value = False
+        
+        mock_blob_service_instance = Mock()
+        mock_blob_service_instance.get_blob_client.return_value = mock_blob_client
+        mock_blob_service.return_value = mock_blob_service_instance
+        
+        with patch.dict(os.environ, {'AZURE_STORAGE_ACCOUNT_NAME': 'test_storage'}):
+            with patch('streamlit.spinner'), patch('streamlit.error') as mock_error:
+                with patch('os.makedirs'):
+                    result = download_model_from_azure()
+                    
+                    assert result is False
+                    mock_error.assert_called_with("❌ Modelo no encontrado en Azure: models/production/u2net.onnx")
+    
+    @patch('app.DefaultAzureCredential')
+    @patch('app.BlobServiceClient')
+    def test_download_model_exception_handling(self, mock_blob_service, mock_credential):
+        # Setup mock to raise exception
+        mock_blob_service.side_effect = Exception("Azure connection failed")
+        
+        with patch.dict(os.environ, {'AZURE_STORAGE_ACCOUNT_NAME': 'test_storage'}):
+            with patch('streamlit.error') as mock_error:
+                with patch('streamlit.info') as mock_info:
+                    result = download_model_from_azure()
+                    
+                    assert result is False
+                    mock_error.assert_called_with("❌ Error al descargar el modelo desde Azure: Azure connection failed")
+                    mock_info.assert_called_with("💡 Verifica la configuración de Azure y los permisos de acceso.")
+    
+    @patch('os.path.exists')
+    @patch('app.download_model_from_azure')
+    @patch('onnxruntime.InferenceSession')
+    def test_load_model_with_azure_download_success(self, mock_session, mock_download, mock_exists):
+        # First call returns False (no local model), subsequent calls return True (after download)
+        mock_exists.side_effect = [False, True]
+        mock_download.return_value = True
+        
+        mock_session_instance = Mock()
+        mock_session.return_value = mock_session_instance
+        
+        with patch('streamlit.info') as mock_info:
+            with patch('streamlit.success') as mock_success:
+                result = load_model()
+                
+                assert result == mock_session_instance
+                mock_info.assert_called_with("🔍 Modelo no encontrado localmente. Intentando descargar desde Azure...")
+                mock_download.assert_called_once()
+                mock_success.assert_called_with("🎯 Modelo cargado exitosamente!")
+    
+    @patch('os.path.exists', return_value=False)
+    @patch('app.download_model_from_azure', return_value=False)
+    def test_load_model_azure_download_fails(self, mock_download, mock_exists):
+        with patch('streamlit.info') as mock_info:
+            with patch('streamlit.error') as mock_error:
+                with patch('streamlit.markdown') as mock_markdown:
+                    result = load_model()
+                    
+                    assert result is None
+                    mock_info.assert_called_once_with("🔍 Modelo no encontrado localmente. Intentando descargar desde Azure...")
+                    mock_download.assert_called_once()
+                    mock_error.assert_called_with("❌ No se pudo obtener el modelo desde Azure Blob Storage")
 
 
 if __name__ == "__main__":

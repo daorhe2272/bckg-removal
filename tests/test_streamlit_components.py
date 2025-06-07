@@ -14,8 +14,10 @@ class TestStreamlitComponents:
     
     @patch('streamlit.error')
     @patch('streamlit.info')
+    @patch('streamlit.markdown')
+    @patch('app.download_model_from_azure', return_value=False)
     @patch('os.path.exists', return_value=False)
-    def test_model_loading_error_display(self, mock_exists, mock_info, mock_error):
+    def test_model_loading_error_display(self, mock_exists, mock_download, mock_markdown, mock_info, mock_error):
         from app import load_model
         
         result = load_model()
