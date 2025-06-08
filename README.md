@@ -71,33 +71,7 @@ docker-compose exec bg-remover-app python -m pytest tests/test_app.py::TestLoggi
 
 ## ☁️ Opciones de Despliegue en la Nube
 
-### Streamlit Cloud (Recomendado)
-1. Sube tu código a GitHub.
-2. Conecta tu repositorio a [Streamlit Cloud](https://streamlit.io/cloud).
-3. ¡Despliega con un clic!
-
-### Railway
-1. Instala Railway CLI: `npm install -g @railway/cli`
-2. Inicia sesión: `railway login`
-3. Despliega: `railway up`
-
-### Heroku
-1. Crea `Procfile`:
-```
-web: streamlit run src/app.py --server.port=$PORT --server.address=0.0.0.0
-```
-2. Despliega usando Heroku CLI o la integración de GitHub.
-
-### Render
-1. Conecta tu repositorio de GitHub.
-2. Configura el comando de construcción: `pip install -r requirements.txt`
-3. Configura el comando de inicio: `streamlit run src/app.py --server.port=$PORT --server.address=0.0.0.0`
-
-## 📋 Requisitos
-
-- Python 3.9+
-- Archivo del modelo U2-Net en `../models/production/u2net.onnx`
-- Todas las dependencias listadas en `requirements.txt`
+Por definir...
 
 ## 🎯 Uso
 
