@@ -1,0 +1,6 @@
+.cursor/
+
+.gitignore
+OVERVIEW.md
+TASKS.md
+.env

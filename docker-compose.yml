@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  bg-remover-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: test
+    entrypoint: ["streamlit", "run", "src/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+    restart: unless-stopped 

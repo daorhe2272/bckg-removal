@@ -1,0 +1,27 @@
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+
+# IDE and editors
+.cursor/
+.vscode/
+
+# Project specific
+models/
+*.onnx
+logs/
+*.log
+
+# Documentation
+OVERVIEW.md
+TASKS.md
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
