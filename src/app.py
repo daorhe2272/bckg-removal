@@ -23,6 +23,12 @@ st.set_page_config(
 )
 
 def get_latest_model_path():
+    """
+    Busca el archivo .onnx más reciente en el directorio local de producción.
+    
+    Retorna:
+        str: Ruta del modelo más reciente, o None si no se encuentra ninguno
+    """
     production_dir = "models/production/"
     onnx_files = glob.glob(os.path.join(production_dir, "*.onnx"))
     
@@ -35,6 +41,12 @@ def get_latest_model_path():
 MODEL_PATH = get_latest_model_path()
 
 def get_azure_config():
+    """
+    Obtiene la configuración de Azure desde las variables de entorno.
+    
+    Retorna:
+        dict: Diccionario con las credenciales y configuración de Azure
+    """
     config = {
         'storage_account_name': os.getenv('AZURE_STORAGE_ACCOUNT_NAME'),
         'client_id': os.getenv('AZURE_CLIENT_ID'),
@@ -45,7 +57,17 @@ def get_azure_config():
     return config
 
 def log_prediction_to_blob(image_metadata, processing_time, success, error_message=None):
+    """
+    Registra las predicciones en Azure Blob Storage para monitoreo y análisis.
+    
+    Args:
+        image_metadata (dict): Metadatos de la imagen procesada
+        processing_time (float): Tiempo de procesamiento en segundos
+        success (bool): Si el procesamiento fue exitoso
+        error_message (str, optional): Mensaje de error si el procesamiento falló
+    """
     try:
+        # Determinar el entorno y archivo de log correspondiente
         environment = os.getenv('ENVIRONMENT', 'development').lower()
         
         if environment in ['development', 'dev', 'test']:
@@ -55,6 +77,7 @@ def log_prediction_to_blob(image_metadata, processing_time, success, error_messa
         
         config = get_azure_config()
         
+        # Verificar que todas las credenciales estén disponibles
         required_credentials = [
             config['storage_account_name'],
             config['client_id'],
@@ -66,6 +89,7 @@ def log_prediction_to_blob(image_metadata, processing_time, success, error_messa
             st.warning("⚠️ No se pueden registrar las predicciones: Credenciales de Azure incompletas para el almacenamiento de logs.")
             return
         
+        # Conectar a Azure Blob Storage usando DefaultAzureCredential
         account_url = f"https://{config['storage_account_name']}.blob.core.windows.net"
         credential = DefaultAzureCredential()
         blob_service_client = BlobServiceClient(account_url=account_url, credential=credential)
@@ -74,6 +98,7 @@ def log_prediction_to_blob(image_metadata, processing_time, success, error_messa
             st.warning("⚠️ Metadatos de imagen no disponibles para logging")
             return
             
+        # Crear entrada de log con todos los detalles
         log_entry = {
             'timestamp': datetime.now().isoformat(),
             'entorno': environment,
@@ -89,13 +114,17 @@ def log_prediction_to_blob(image_metadata, processing_time, success, error_messa
         }
         
         try:
+            # Intentar leer el contenido existente del archivo de log
             blob_client = blob_service_client.get_blob_client(container='models', blob=log_file)
             existing_content = blob_client.download_blob().readall().decode('utf-8')
         except Exception:
+            # Si el archivo no existe, empezar con contenido vacío
             existing_content = ""
         
+        # Agregar nueva entrada al contenido existente
         new_content = existing_content + json.dumps(log_entry) + '\n'
         
+        # Subir el contenido actualizado
         blob_client.upload_blob(new_content, overwrite=True)
         
     except Exception as e:
@@ -104,6 +133,15 @@ def log_prediction_to_blob(image_metadata, processing_time, success, error_messa
             st.code(f"Error: {str(e)}\nMetadatos de la imagen: {json.dumps(image_metadata, indent=2)}")
 
 def download_model_from_azure(status_placeholder=None):
+    """
+    Descarga el modelo más reciente desde Azure Blob Storage.
+    
+    Args:
+        status_placeholder: Placeholder de Streamlit para mostrar el estado de la descarga
+        
+    Retorna:
+        bool: True si la descarga fue exitosa, False en caso contrario
+    """
     if status_placeholder is None:
         status_container = st.container()
         status_placeholder = status_container.empty()
@@ -111,6 +149,7 @@ def download_model_from_azure(status_placeholder=None):
     try:
         config = get_azure_config()
         
+        # Verificar que todas las credenciales necesarias estén disponibles
         required_credentials = [
             config['storage_account_name'],
             config['client_id'],
@@ -127,6 +166,7 @@ def download_model_from_azure(status_placeholder=None):
         with status_placeholder.container():
             st.info(f"🔗 Conectando a Azure Storage: {config['storage_account_name']}")
         
+        # Establecer conexión con Azure Blob Storage
         account_url = f"https://{config['storage_account_name']}.blob.core.windows.net"
         credential = DefaultAzureCredential()
         blob_service_client = BlobServiceClient(account_url=account_url, credential=credential)
@@ -137,6 +177,7 @@ def download_model_from_azure(status_placeholder=None):
             st.info(f"📁 Verificando acceso al contenedor: {config['container_name']}")
         
         try:
+            # Verificar que el contenedor sea accesible
             container_properties = container_client.get_container_properties()
             with status_placeholder.container():
                 st.success(f"✅ Acceso al contenedor confirmado")
@@ -149,11 +190,13 @@ def download_model_from_azure(status_placeholder=None):
             st.info("🔍 Buscando archivos en Azure Blob Storage...")
             
         with st.spinner("Procesando archivos..."):
+            # Obtener lista de todos los blobs en el contenedor
             all_blobs = list(container_client.list_blobs())
             
             onnx_blobs = []
             production_blobs = []
             
+            # Buscar específicamente archivos .onnx en la carpeta production/
             for blob in container_client.list_blobs(name_starts_with="production/"):
                 production_blobs.append(blob.name)
                 if blob.name.endswith('.onnx'):
@@ -173,18 +216,21 @@ def download_model_from_azure(status_placeholder=None):
                     st.info("💡 Verifica que los archivos .onnx estén subidos en la ruta correcta")
                 return False
             
+            # Seleccionar el modelo más reciente basado en la fecha de modificación
             latest_blob = max(onnx_blobs, key=lambda x: x.last_modified)
             blob_name = latest_blob.name
             
             with status_placeholder.container():
                 st.info(f"📥 Descargando: {os.path.basename(blob_name)}")
         
+        # Crear directorio local si no existe
         os.makedirs("models/production", exist_ok=True)
         download_path = os.path.join("models/production", os.path.basename(blob_name))
         
         with st.spinner("📥 Descargando modelo..."):
             blob_client = blob_service_client.get_blob_client(container=config['container_name'], blob=blob_name)
             
+            # Descargar y guardar el archivo
             with open(download_path, "wb") as download_file:
                 download_file.write(blob_client.download_blob().readall())
             
@@ -202,11 +248,19 @@ def download_model_from_azure(status_placeholder=None):
 
 @st.cache_resource
 def load_model():
+    """
+    Carga el modelo ONNX para inferencia. Usa caché de Streamlit para optimizar rendimiento.
+    Si no encuentra un modelo local, intenta descargarlo desde Azure.
+    
+    Retorna:
+        onnxruntime.InferenceSession: Sesión de inferencia del modelo, o None si falla
+    """
     status_container = st.container()
     status_placeholder = status_container.empty()
     
     model_path = MODEL_PATH
     
+    # Si no hay modelo local, intentar descarga desde Azure
     if model_path is None or not os.path.exists(model_path):
         with status_placeholder.container():
             st.info("🔍 Modelo no encontrado localmente. Intentando descargar desde Azure...")
@@ -222,6 +276,7 @@ def load_model():
                 """)
             return None
         
+        # Actualizar la ruta del modelo después de la descarga
         model_path = get_latest_model_path()
         
         if model_path is None:
@@ -233,6 +288,7 @@ def load_model():
             st.info(f"🔍 Cargando modelo local: {os.path.basename(model_path)}")
     
     try:
+        # Cargar el modelo usando ONNX Runtime
         session = ort.InferenceSession(model_path)
         with status_placeholder.container():
             st.success("🎯 Modelo cargado exitosamente!")
@@ -243,41 +299,100 @@ def load_model():
         return None
 
 def preprocess_image(image: Image.Image) -> np.ndarray:
+    """
+    Preprocesa la imagen para el modelo U2-Net.
+    
+    Args:
+        image (PIL.Image): Imagen de entrada
+        
+    Retorna:
+        np.ndarray: Array de imagen preprocesada para el modelo
+    """
+    # Convertir a RGB y redimensionar a 320x320 (tamaño esperado por U2-Net)
     img = image.convert('RGB')
     img = img.resize((320, 320))
+    
+    # Normalizar valores de píxel a rango [0, 1]
     img_array = np.array(img).astype(np.float32) / 255.0
+    
+    # Cambiar orden de dimensiones de HWC a CHW (canales primero)
     img_array = np.transpose(img_array, (2, 0, 1))
+    
+    # Agregar dimensión de batch
     img_array = np.expand_dims(img_array, axis=0)
     return img_array
 
 def postprocess_mask(mask: np.ndarray, original_size: tuple) -> np.ndarray:
+    """
+    Postprocesa la máscara de salida del modelo.
+    
+    Args:
+        mask (np.ndarray): Máscara de salida del modelo
+        original_size (tuple): Tamaño original de la imagen (ancho, alto)
+        
+    Retorna:
+        np.ndarray: Máscara procesada redimensionada al tamaño original
+    """
+    # Remover dimensiones extra y normalizar a rango [0, 255]
     mask = mask.squeeze()
     mask = (mask * 255).astype(np.uint8)
+    
+    # Redimensionar a tamaño original
     mask = cv2.resize(mask, original_size)
     return mask
 
 def apply_mask_to_image(image: Image.Image, mask: np.ndarray) -> Image.Image:
+    """
+    Aplica la máscara a la imagen para crear fondo transparente.
+    
+    Args:
+        image (PIL.Image): Imagen original
+        mask (np.ndarray): Máscara de segmentación
+        
+    Retorna:
+        PIL.Image: Imagen con fondo transparente
+    """
+    # Convertir imagen a RGBA para soporte de transparencia
     img_array = np.array(image.convert('RGBA'))
+    
+    # Normalizar máscara y aplicar como canal alfa
     mask_normalized = mask.astype(np.float32) / 255.0
     img_array[:, :, 3] = (mask_normalized * 255).astype(np.uint8)
     return Image.fromarray(img_array, 'RGBA')
 
 def process_image(image: Image.Image, session, image_metadata=None):
+    """
+    Procesa una imagen completa: preprocesamiento, inferencia y postprocesamiento.
+    
+    Args:
+        image (PIL.Image): Imagen de entrada
+        session: Sesión de inferencia ONNX
+        image_metadata (dict, optional): Metadatos para logging
+        
+    Retorna:
+        PIL.Image: Imagen procesada con fondo removido, o None si hay error
+    """
     start_time = time.time()
     
     try:
+        # Guardar tamaño original para redimensionar la máscara final
         original_size = image.size
+        
+        # Preprocesar imagen para el modelo
         input_array = preprocess_image(image)
         
+        # Ejecutar inferencia del modelo
         inputs = {session.get_inputs()[0].name: input_array}
         outputs = session.run(None, inputs)
         mask = outputs[0]
         
+        # Postprocesar máscara y aplicar a imagen original
         processed_mask = postprocess_mask(mask, original_size)
         result_image = apply_mask_to_image(image, processed_mask)
         
         processing_time = time.time() - start_time
         
+        # Registrar predicción exitosa en logs
         if image_metadata:
             log_prediction_to_blob(image_metadata, processing_time, success=True)
         
@@ -286,7 +401,7 @@ def process_image(image: Image.Image, session, image_metadata=None):
         processing_time = time.time() - start_time
         error_message = str(e)
         
-        # Log failed prediction
+        # Registrar predicción fallida en logs
         if image_metadata:
             log_prediction_to_blob(image_metadata, processing_time, success=False, error_message=error_message)
         
@@ -294,6 +409,15 @@ def process_image(image: Image.Image, session, image_metadata=None):
         return None
 
 def image_to_bytes(image: Image.Image) -> bytes:
+    """
+    Convierte una imagen PIL a bytes para descarga.
+    
+    Args:
+        image (PIL.Image): Imagen a convertir
+        
+    Retorna:
+        bytes: Imagen en formato bytes PNG
+    """
     img_byte_arr = io.BytesIO()
     image.save(img_byte_arr, format='PNG')
     return img_byte_arr.getvalue()
@@ -305,6 +429,7 @@ with st.sidebar:
     st.header("⚙️ Configuración")
     config = get_azure_config()
     
+    # Verificar si Azure está completamente configurado
     azure_configured = all([
         config['storage_account_name'],
         config['client_id'],
