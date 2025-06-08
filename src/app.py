@@ -2,6 +2,9 @@ import os
 import io
 import cv2
 import glob
+import json
+import time
+from datetime import datetime
 import numpy as np
 import streamlit as st
 import onnxruntime as ort
@@ -40,6 +43,65 @@ def get_azure_config():
         'container_name': 'models'
     }
     return config
+
+def log_prediction_to_blob(image_metadata, processing_time, success, error_message=None):
+    try:
+        environment = os.getenv('ENVIRONMENT', 'development').lower()
+        
+        if environment in ['development', 'dev', 'test']:
+            log_file = 'logs/dev_predictions.log'
+        else:
+            log_file = 'logs/prod_predictions.log'
+        
+        config = get_azure_config()
+        
+        required_credentials = [
+            config['storage_account_name'],
+            config['client_id'],
+            config['client_secret'],
+            config['tenant_id']
+        ]
+        
+        if not all(required_credentials):
+            st.warning("⚠️ No se pueden registrar las predicciones: Credenciales de Azure incompletas para el almacenamiento de logs.")
+            return
+        
+        account_url = f"https://{config['storage_account_name']}.blob.core.windows.net"
+        credential = DefaultAzureCredential()
+        blob_service_client = BlobServiceClient(account_url=account_url, credential=credential)
+        
+        if not image_metadata or not isinstance(image_metadata, dict):
+            st.warning("⚠️ Metadatos de imagen no disponibles para logging")
+            return
+            
+        log_entry = {
+            'timestamp': datetime.now().isoformat(),
+            'entorno': environment,
+            'nombre_imagen': image_metadata.get('name', 'desconocido'),
+            'tamaño_imagen_kb': image_metadata.get('size_kb', 0),
+            'ancho_imagen_px': image_metadata.get('width_px', 0),
+            'alto_imagen_px': image_metadata.get('height_px', 0),
+            'formato_imagen': image_metadata.get('format', 'desconocido'),
+            'modo_imagen': image_metadata.get('mode', 'desconocido'),
+            'tiempo_procesamiento_segundos': round(processing_time, 3),
+            'éxito': success,
+            'mensaje_error': error_message
+        }
+        
+        try:
+            blob_client = blob_service_client.get_blob_client(container='models', blob=log_file)
+            existing_content = blob_client.download_blob().readall().decode('utf-8')
+        except Exception:
+            existing_content = ""
+        
+        new_content = existing_content + json.dumps(log_entry) + '\n'
+        
+        blob_client.upload_blob(new_content, overwrite=True)
+        
+    except Exception as e:
+        st.error(f"❌ Error al registrar la predicción en Azure Blob Storage: {str(e)}")
+        with st.expander("🔍 Ver detalles del error de logging"):
+            st.code(f"Error: {str(e)}\nMetadatos de la imagen: {json.dumps(image_metadata, indent=2)}")
 
 def download_model_from_azure(status_placeholder=None):
     if status_placeholder is None:
@@ -200,7 +262,9 @@ def apply_mask_to_image(image: Image.Image, mask: np.ndarray) -> Image.Image:
     img_array[:, :, 3] = (mask_normalized * 255).astype(np.uint8)
     return Image.fromarray(img_array, 'RGBA')
 
-def process_image(image: Image.Image, session):
+def process_image(image: Image.Image, session, image_metadata=None):
+    start_time = time.time()
+    
     try:
         original_size = image.size
         input_array = preprocess_image(image)
@@ -212,9 +276,21 @@ def process_image(image: Image.Image, session):
         processed_mask = postprocess_mask(mask, original_size)
         result_image = apply_mask_to_image(image, processed_mask)
         
+        processing_time = time.time() - start_time
+        
+        if image_metadata:
+            log_prediction_to_blob(image_metadata, processing_time, success=True)
+        
         return result_image
     except Exception as e:
-        st.error(f"Error al procesar la imagen: {str(e)}")
+        processing_time = time.time() - start_time
+        error_message = str(e)
+        
+        # Log failed prediction
+        if image_metadata:
+            log_prediction_to_blob(image_metadata, processing_time, success=False, error_message=error_message)
+        
+        st.error(f"Error al procesar la imagen: {error_message}")
         return None
 
 def image_to_bytes(image: Image.Image) -> bytes:
@@ -303,10 +379,18 @@ with col2:
     st.header("✨ Imagen Procesada")
     
     if uploaded_file is not None:
+        image_metadata = {
+            'name': uploaded_file.name,
+            'size_kb': round(uploaded_file.size / 1024, 2),
+            'width_px': original_image.size[0],
+            'height_px': original_image.size[1],
+            'format': original_image.format or 'unknown',
+            'mode': original_image.mode
+        }
+        
         if st.button("🚀 Eliminar Fondo", type="primary", use_container_width=True):
             with st.spinner("Procesando imagen con IA..."):
-                original_image = Image.open(uploaded_file)
-                processed_image = process_image(original_image, session)
+                processed_image = process_image(original_image, session, image_metadata)
                 
                 if processed_image:
                     st.session_state.processed_image = processed_image

@@ -17,7 +17,8 @@ from app import (
     process_image,
     image_to_bytes,
     get_azure_config,
-    download_model_from_azure
+    download_model_from_azure,
+    log_prediction_to_blob
 )
 
 class TestImagePreprocessing:
@@ -462,6 +463,165 @@ class TestAzureIntegration:
                     mock_info.assert_called_once_with("🔍 Modelo no encontrado localmente. Intentando descargar desde Azure...")
                     mock_download.assert_called_once()
                     mock_error.assert_called_with("❌ No se pudo obtener el modelo desde Azure Blob Storage")
+
+
+class TestLoggingFunctionality:
+    
+    def test_log_prediction_to_blob_missing_credentials(self):
+        image_metadata = {
+            'name': 'test_image.jpg',
+            'size_kb': 150.5,
+            'width_px': 800,
+            'height_px': 600,
+            'format': 'JPEG',
+            'mode': 'RGB'
+        }
+        
+        with patch.dict(os.environ, {}, clear=True):
+            with patch('streamlit.warning') as mock_warning:
+                log_prediction_to_blob(image_metadata, 2.5, True)
+                
+                mock_warning.assert_called_once_with("⚠️ No se pueden registrar las predicciones: Credenciales de Azure incompletas para el almacenamiento de logs.")
+    
+    def test_log_prediction_to_blob_production_environment(self):
+        """Test that production environment uses correct log file"""
+        image_metadata = {'name': 'test.jpg'}
+        
+        with patch.dict(os.environ, {'ENVIRONMENT': 'production'}, clear=True):
+            with patch('streamlit.warning') as mock_warning:
+                log_prediction_to_blob(image_metadata, 1.0, True)
+                
+                mock_warning.assert_called_once_with("⚠️ No se pueden registrar las predicciones: Credenciales de Azure incompletas para el almacenamiento de logs.")
+    
+    @patch('app.DefaultAzureCredential')
+    @patch('app.BlobServiceClient')
+    def test_log_prediction_to_blob_azure_success(self, mock_blob_service, mock_credential):
+        image_metadata = {
+            'name': 'test_image.png',
+            'size_kb': 250.0,
+            'width_px': 1024,
+            'height_px': 768,
+            'format': 'PNG',
+            'mode': 'RGBA'
+        }
+        
+        # Mock Azure Blob Service
+        mock_blob_client = Mock()
+        mock_blob_client.download_blob.return_value.readall.return_value = b'existing log content\n'
+        
+        mock_blob_service_instance = Mock()
+        mock_blob_service_instance.get_blob_client.return_value = mock_blob_client
+        mock_blob_service.return_value = mock_blob_service_instance
+        
+        with patch.dict(os.environ, {
+            'AZURE_STORAGE_ACCOUNT_NAME': 'test_storage',
+            'AZURE_CLIENT_ID': 'test_client',
+            'AZURE_CLIENT_SECRET': 'test_secret',
+            'AZURE_TENANT_ID': 'test_tenant',
+            'ENVIRONMENT': 'development'
+        }):
+            log_prediction_to_blob(image_metadata, 1.5, True)
+            
+            # Verify blob client was called with correct parameters
+            mock_blob_service_instance.get_blob_client.assert_called_with(
+                container='models', 
+                blob='logs/dev_predictions.log'
+            )
+            mock_blob_client.download_blob.assert_called_once()
+            mock_blob_client.upload_blob.assert_called_once()
+            
+            # Check that upload was called with the right content structure
+            upload_call_args = mock_blob_client.upload_blob.call_args[0][0]
+            assert 'existing log content' in upload_call_args
+            assert 'test_image.png' in upload_call_args
+            assert '"tiempo_procesamiento_segundos": 1.5' in upload_call_args
+            assert ('"éxito": true' in upload_call_args or '"\\u00e9xito": true' in upload_call_args)
+    
+    def test_log_prediction_to_blob_failure_handling(self):
+        image_metadata = {'name': 'test.jpg'}
+        
+        with patch.dict(os.environ, {
+            'AZURE_STORAGE_ACCOUNT_NAME': 'test_storage',
+            'AZURE_CLIENT_ID': 'test_client',
+            'AZURE_CLIENT_SECRET': 'test_secret',
+            'AZURE_TENANT_ID': 'test_tenant'
+        }):
+            with patch('app.BlobServiceClient', side_effect=Exception("Azure error")):
+                with patch('streamlit.error') as mock_error:
+                    with patch('streamlit.expander') as mock_expander:
+                        mock_expander.return_value.__enter__ = Mock()
+                        mock_expander.return_value.__exit__ = Mock()
+                        
+                        try:
+                            log_prediction_to_blob(image_metadata, 1.0, False, "Test error")
+                            # Should not raise an exception
+                        except Exception:
+                            pytest.fail("log_prediction_to_blob should not raise exceptions")
+                        
+                        mock_error.assert_called_once()
+    
+    def test_process_image_with_logging_success(self):
+        mock_session = Mock()
+        mock_input = Mock()
+        mock_input.name = 'input'
+        mock_session.get_inputs.return_value = [mock_input]
+        
+        fake_output = np.random.rand(1, 1, 320, 320).astype(np.float32)
+        mock_session.run.return_value = [fake_output]
+        
+        image = Image.new('RGB', (100, 100), color=(255, 0, 0))
+        image_metadata = {
+            'name': 'test.jpg',
+            'size_kb': 10.5,
+            'width_px': 100,
+            'height_px': 100,
+            'format': 'JPEG',
+            'mode': 'RGB'
+        }
+        
+        with patch('app.log_prediction_to_blob') as mock_log:
+            result = process_image(image, mock_session, image_metadata)
+            
+            assert result is not None
+            mock_log.assert_called_once()
+            call_args = mock_log.call_args
+            assert call_args[0][0] == image_metadata
+            assert isinstance(call_args[0][1], float)
+            assert call_args[1]['success'] is True
+    
+    def test_process_image_with_logging_failure(self):
+        mock_session = Mock()
+        mock_session.get_inputs.side_effect = Exception("Model error")
+        
+        image = Image.new('RGB', (100, 100), color=(255, 0, 0))
+        image_metadata = {'name': 'test.jpg'}
+        
+        with patch('app.log_prediction_to_blob') as mock_log:
+            with patch('streamlit.error'):
+                result = process_image(image, mock_session, image_metadata)
+                
+                assert result is None
+                mock_log.assert_called_once()
+                call_args = mock_log.call_args
+                assert call_args[1]['success'] is False
+                assert call_args[1]['error_message'] == "Model error"
+    
+    def test_process_image_without_metadata(self):
+        mock_session = Mock()
+        mock_input = Mock()
+        mock_input.name = 'input'
+        mock_session.get_inputs.return_value = [mock_input]
+        
+        fake_output = np.random.rand(1, 1, 320, 320).astype(np.float32)
+        mock_session.run.return_value = [fake_output]
+        
+        image = Image.new('RGB', (100, 100), color=(255, 0, 0))
+        
+        with patch('app.log_prediction_to_blob') as mock_log:
+            result = process_image(image, mock_session)  # No metadata provided
+            
+            assert result is not None
+            mock_log.assert_not_called()  # Should not log when no metadata provided
 
 if __name__ == "__main__":
     pytest.main([__file__]) 
