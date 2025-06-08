@@ -93,4 +93,5 @@ jobs:
       uses: azure/webapps-deploy@v2
       with:
         app-name: 'background-removal-app'
+        resource-group: 'background-removal'
         images: 'ghcr.io/${{ github.repository }}:latest' 
