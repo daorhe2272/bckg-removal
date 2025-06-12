@@ -18,7 +18,8 @@ from app import (
     image_to_bytes,
     get_azure_config,
     download_model_from_azure,
-    log_prediction_to_blob
+    log_prediction_to_blob,
+    optimize_image_size
 )
 
 class TestImagePreprocessing:
@@ -147,6 +148,78 @@ class TestImageConversion:
             assert recovered_image.size == size
 
 
+class TestImageOptimization:
+    """Test image size optimization functionality"""
+    
+    def test_optimize_small_image_no_resize(self):
+        """Test that small images are not resized"""
+        image = Image.new('RGB', (800, 600), color=(255, 0, 0))
+        
+        optimized, was_resized = optimize_image_size(image, max_dimension=2000)
+        
+        assert not was_resized
+        assert optimized.size == (800, 600)
+        assert optimized is image  # Should return the same object
+    
+    def test_optimize_exact_size_no_resize(self):
+        """Test that images exactly at max_dimension are not resized"""
+        image = Image.new('RGB', (2000, 2000), color=(0, 255, 0))
+        
+        optimized, was_resized = optimize_image_size(image, max_dimension=2000)
+        
+        assert not was_resized
+        assert optimized.size == (2000, 2000)
+        assert optimized is image
+    
+    def test_optimize_large_wide_image(self):
+        """Test that large wide images are properly resized"""
+        image = Image.new('RGB', (3000, 1500), color=(0, 0, 255))
+        
+        optimized, was_resized = optimize_image_size(image, max_dimension=2000)
+        
+        assert was_resized
+        assert optimized.size == (2000, 1000)  # Maintains aspect ratio
+        assert optimized is not image  # Should be a new object
+    
+    def test_optimize_large_tall_image(self):
+        """Test that large tall images are properly resized"""
+        image = Image.new('RGB', (1200, 2400), color=(255, 255, 0))
+        
+        optimized, was_resized = optimize_image_size(image, max_dimension=2000)
+        
+        assert was_resized
+        assert optimized.size == (1000, 2000)  # Maintains aspect ratio
+        assert optimized is not image
+    
+    def test_optimize_square_large_image(self):
+        """Test that large square images are properly resized"""
+        image = Image.new('RGB', (4000, 4000), color=(255, 0, 255))
+        
+        optimized, was_resized = optimize_image_size(image, max_dimension=2000)
+        
+        assert was_resized
+        assert optimized.size == (2000, 2000)
+        assert optimized is not image
+    
+    def test_optimize_custom_max_dimension(self):
+        """Test optimization with custom max_dimension"""
+        image = Image.new('RGB', (1500, 1000), color=(128, 128, 128))
+        
+        optimized, was_resized = optimize_image_size(image, max_dimension=1200)
+        
+        assert was_resized
+        assert optimized.size == (1200, 800)  # Maintains aspect ratio
+
+    def test_optimize_edge_case_one_pixel_over(self):
+        """Test edge case where image is just one pixel over the limit"""
+        image = Image.new('RGB', (2001, 1000), color=(100, 150, 200))
+        
+        optimized, was_resized = optimize_image_size(image, max_dimension=2000)
+        
+        assert was_resized
+        assert optimized.size[0] <= 2000
+        assert optimized.size[1] <= 2000
+
 class TestModelLoading:
     
     def test_load_model_file_not_exists(self):
@@ -233,6 +306,94 @@ class TestImageProcessing:
             
             assert result is None
             mock_error.assert_called_once()
+    
+    def test_process_image_with_small_image_no_optimization(self):
+        """Test that small images are processed without optimization"""
+        image = Image.new('RGB', (800, 600), color=(255, 128, 64))
+        mock_session = self.create_mock_session()
+        
+        result = process_image(image, mock_session)
+        
+        assert isinstance(result, Image.Image)
+        assert result.mode == 'RGBA'
+        assert result.size == (800, 600)  # Same as original
+        
+        mock_session.get_inputs.assert_called_once()
+        mock_session.run.assert_called_once()
+    
+    def test_process_image_with_large_image_optimization(self):
+        """Test that large images are optimized during processing"""
+        large_image = Image.new('RGB', (3000, 2000), color=(64, 128, 255))
+        mock_session = self.create_mock_session()
+        
+        result = process_image(large_image, mock_session)
+        
+        assert isinstance(result, Image.Image)
+        assert result.mode == 'RGBA'
+        # Image should be optimized to max 2000px on the larger side
+        assert result.size == (2000, 1333)  # Maintains aspect ratio, width limited
+        
+        mock_session.get_inputs.assert_called_once()
+        mock_session.run.assert_called_once()
+    
+    def test_process_image_optimization_metadata_logging(self):
+        """Test that optimization information is included in metadata logging"""
+        large_image = Image.new('RGB', (2500, 1500), color=(200, 100, 50))
+        mock_session = self.create_mock_session()
+        
+        image_metadata = {
+            'name': 'test_large.jpg',
+            'size_kb': 500.0,
+            'width_px': 2500,
+            'height_px': 1500,
+            'format': 'JPEG',
+            'mode': 'RGB'
+        }
+        
+        with patch('app.log_prediction_to_blob') as mock_log:
+            result = process_image(large_image, mock_session, image_metadata)
+            
+            assert isinstance(result, Image.Image)
+            
+            # Verify logging was called with optimization metadata
+            mock_log.assert_called_once()
+            logged_metadata = mock_log.call_args[0][0]
+            
+            assert logged_metadata['optimized'] is True
+            assert logged_metadata['original_width_px'] == 2500
+            assert logged_metadata['original_height_px'] == 1500
+            assert logged_metadata['processed_width_px'] == 2000
+            assert logged_metadata['processed_height_px'] == 1200
+    
+    def test_process_image_no_optimization_metadata_logging(self):
+        """Test that no optimization flag is set for small images"""
+        small_image = Image.new('RGB', (800, 600), color=(100, 200, 150))
+        mock_session = self.create_mock_session()
+        
+        image_metadata = {
+            'name': 'test_small.jpg',
+            'size_kb': 100.0,
+            'width_px': 800,
+            'height_px': 600,
+            'format': 'JPEG',
+            'mode': 'RGB'
+        }
+        
+        with patch('app.log_prediction_to_blob') as mock_log:
+            result = process_image(small_image, mock_session, image_metadata)
+            
+            assert isinstance(result, Image.Image)
+            
+            # Verify logging was called with no optimization flag
+            mock_log.assert_called_once()
+            logged_metadata = mock_log.call_args[0][0]
+            
+            assert logged_metadata['optimized'] is False
+            # These keys should not exist for non-optimized images
+            assert 'original_width_px' not in logged_metadata
+            assert 'original_height_px' not in logged_metadata
+            assert 'processed_width_px' not in logged_metadata
+            assert 'processed_height_px' not in logged_metadata
 
 
 class TestIntegration:
