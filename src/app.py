@@ -4,17 +4,86 @@ import cv2
 import glob
 import json
 import time
-from datetime import datetime
 import numpy as np
 import streamlit as st
 import onnxruntime as ort
 
 from PIL import Image
+from datetime import datetime
 from dotenv import load_dotenv
 from azure.storage.blob import BlobServiceClient
 from azure.identity import DefaultAzureCredential
 
 load_dotenv()
+
+def initialize_model_at_startup():
+    """
+    Inicializa el modelo al arranque del contenedor, antes de que se muestre la UI.
+    Esto asegura que el modelo esté listo desde el primer uso.
+    """
+    print(f"[STARTUP] Verificando disponibilidad del modelo...")
+    
+    model_path = get_latest_model_path()
+    if model_path and os.path.exists(model_path):
+        print(f"[STARTUP] ✅ Modelo local encontrado: {os.path.basename(model_path)}")
+        return True
+    
+    print(f"[STARTUP] 📥 Modelo no encontrado localmente, descargando desde Azure...")
+    
+    # Intentar descarga sin UI de Streamlit
+    try:
+        config = get_azure_config()
+        
+        # Verificar credenciales
+        required_credentials = [
+            config['storage_account_name'],
+            config['client_id'],
+            config['client_secret'],
+            config['tenant_id']
+        ]
+        
+        if not all(required_credentials):
+            print(f"[STARTUP] ⚠️ Credenciales de Azure incompletas, modelo se descargará en primer uso")
+            return False
+        
+        # Conectar a Azure Blob Storage
+        account_url = f"https://{config['storage_account_name']}.blob.core.windows.net"
+        credential = DefaultAzureCredential()
+        blob_service_client = BlobServiceClient(account_url=account_url, credential=credential)
+        container_client = blob_service_client.get_container_client(config['container_name'])
+        
+        # Buscar modelos .onnx en production/
+        onnx_blobs = []
+        for blob in container_client.list_blobs(name_starts_with="production/"):
+            if blob.name.endswith('.onnx'):
+                onnx_blobs.append(blob)
+        
+        if not onnx_blobs:
+            print(f"[STARTUP] ❌ No se encontraron modelos en Azure, se intentará descargar en primer uso")
+            return False
+        
+        # Descargar modelo más reciente
+        latest_blob = max(onnx_blobs, key=lambda x: x.last_modified)
+        blob_name = latest_blob.name
+        
+        print(f"[STARTUP] 📥 Descargando: {os.path.basename(blob_name)}")
+        
+        # Crear directorio y descargar
+        os.makedirs("models/production", exist_ok=True)
+        download_path = os.path.join("models/production", os.path.basename(blob_name))
+        
+        blob_client = blob_service_client.get_blob_client(container=config['container_name'], blob=blob_name)
+        
+        with open(download_path, "wb") as download_file:
+            download_file.write(blob_client.download_blob().readall())
+        
+        print(f"[STARTUP] ✅ Modelo descargado exitosamente: {os.path.basename(download_path)}")
+        return True
+        
+    except Exception as e:
+        print(f"[STARTUP] ❌ Error al descargar modelo: {str(e)}")
+        print(f"[STARTUP] ⚠️ El modelo se descargará en el primer uso")
+        return False
 
 st.set_page_config(
     page_title="Herramienta de Eliminación de Fondo",
@@ -250,53 +319,48 @@ def download_model_from_azure(status_placeholder=None):
 def load_model():
     """
     Carga el modelo ONNX para inferencia. Usa caché de Streamlit para optimizar rendimiento.
-    Si no encuentra un modelo local, intenta descargarlo desde Azure.
+    El modelo debería estar disponible localmente gracias a la inicialización al arranque.
     
     Retorna:
         onnxruntime.InferenceSession: Sesión de inferencia del modelo, o None si falla
     """
-    status_container = st.container()
-    status_placeholder = status_container.empty()
+    model_path = get_latest_model_path()
     
-    model_path = MODEL_PATH
-    
-    # Si no hay modelo local, intentar descarga desde Azure
-    if model_path is None or not os.path.exists(model_path):
-        with status_placeholder.container():
-            st.info("🔍 Modelo no encontrado localmente. Intentando descargar desde Azure...")
-        
-        if not download_model_from_azure(status_placeholder):
-            with status_placeholder.container():
-                st.error("❌ No se pudo obtener el modelo desde Azure Blob Storage")
-                st.markdown("""
-                **📋 Verifica la configuración:**
-                - Las variables de entorno de Azure estén configuradas correctamente
-                - El Service Principal tenga permisos de lectura en el Blob Storage  
-                - El modelo existe en la ruta especificada en Azure
-                """)
+    # Si el modelo está disponible localmente
+    if model_path and os.path.exists(model_path):
+        try:
+            session = ort.InferenceSession(model_path)
+            return session
+        except Exception as e:
+            st.error(f"❌ Error al cargar el modelo local: {str(e)}")
             return None
-        
-        # Actualizar la ruta del modelo después de la descarga
-        model_path = get_latest_model_path()
-        
-        if model_path is None:
-            with status_placeholder.container():
-                st.error("❌ No se encontró el modelo después de la descarga")
-            return None
-    else:
-        with status_placeholder.container():
-            st.info(f"🔍 Cargando modelo local: {os.path.basename(model_path)}")
     
-    try:
-        # Cargar el modelo usando ONNX Runtime
-        session = ort.InferenceSession(model_path)
-        with status_placeholder.container():
-            st.success("🎯 Modelo cargado exitosamente!")
-        return session
-    except Exception as e:
-        with status_placeholder.container():
-            st.error(f"❌ Error al cargar el modelo: {str(e)}")
+    # Respaldo: si no hay modelo local, intentar descarga con UI
+    st.info("🔍 Modelo no encontrado localmente. Intentando descargar desde Azure...")
+    
+    if not download_model_from_azure():
+        st.error("❌ No se pudo obtener el modelo desde Azure Blob Storage")
+        st.markdown("""
+        **📋 Verifica la configuración:**
+        - Las variables de entorno de Azure estén configuradas correctamente
+        - El Service Principal tenga permisos de lectura en el Blob Storage  
+        - El modelo existe en la ruta especificada en Azure
+        """)
         return None
+    
+    # Intentar cargar después de la descarga
+    model_path = get_latest_model_path()
+    if model_path and os.path.exists(model_path):
+        try:
+            session = ort.InferenceSession(model_path)
+            st.success("🎯 Modelo cargado exitosamente!")
+            return session
+        except Exception as e:
+            st.error(f"❌ Error al cargar el modelo: {str(e)}")
+            return None
+    
+    st.error("❌ No se encontró el modelo después de la descarga")
+    return None
 
 def preprocess_image(image: Image.Image) -> np.ndarray:
     """
@@ -360,9 +424,43 @@ def apply_mask_to_image(image: Image.Image, mask: np.ndarray) -> Image.Image:
     img_array[:, :, 3] = (mask_normalized * 255).astype(np.uint8)
     return Image.fromarray(img_array, 'RGBA')
 
+def optimize_image_size(image: Image.Image, max_dimension: int = 2000) -> tuple[Image.Image, bool]:
+    """
+    Optimiza el tamaño de la imagen para mejorar el rendimiento del procesamiento.
+    Si la imagen es mayor a max_dimension píxeles en cualquier lado, la redimensiona
+    manteniendo la proporción.
+    
+    Args:
+        image (PIL.Image): Imagen original
+        max_dimension (int): Dimensión máxima permitida (alto o ancho)
+        
+    Retorna:
+        tuple: (imagen_optimizada, fue_redimensionada)
+    """
+    width, height = image.size
+    
+    # Si la imagen es pequeña, no hacer nada
+    if width <= max_dimension and height <= max_dimension:
+        return image, False
+    
+    # Calcular nuevo tamaño manteniendo proporción
+    if width > height:
+        # La imagen es más ancha que alta
+        new_width = max_dimension
+        new_height = int((height * max_dimension) / width)
+    else:
+        # La imagen es más alta que ancha
+        new_height = max_dimension
+        new_width = int((width * max_dimension) / height)
+    
+    # Redimensionar la imagen con alta calidad
+    resized_image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+    
+    return resized_image, True
+
 def process_image(image: Image.Image, session, image_metadata=None):
     """
-    Procesa una imagen completa: preprocesamiento, inferencia y postprocesamiento.
+    Procesa una imagen completa: optimización de tamaño, preprocesamiento, inferencia y postprocesamiento.
     
     Args:
         image (PIL.Image): Imagen de entrada
@@ -375,25 +473,43 @@ def process_image(image: Image.Image, session, image_metadata=None):
     start_time = time.time()
     
     try:
-        # Guardar tamaño original para redimensionar la máscara final
-        original_size = image.size
+        # Optimizar tamaño de imagen para mejor rendimiento
+        optimized_image, was_resized = optimize_image_size(image, max_dimension=2000)
+        
+        if was_resized:
+            original_size = image.size
+            optimized_size = optimized_image.size
+            print(f"[PROCESSING] Imagen redimensionada: {original_size} → {optimized_size} para mejor rendimiento")
+        
+        # Usar la imagen optimizada para el procesamiento
+        processing_size = optimized_image.size
         
         # Preprocesar imagen para el modelo
-        input_array = preprocess_image(image)
+        input_array = preprocess_image(optimized_image)
         
         # Ejecutar inferencia del modelo
         inputs = {session.get_inputs()[0].name: input_array}
         outputs = session.run(None, inputs)
         mask = outputs[0]
         
-        # Postprocesar máscara y aplicar a imagen original
-        processed_mask = postprocess_mask(mask, original_size)
-        result_image = apply_mask_to_image(image, processed_mask)
+        # Postprocesar máscara y aplicar a la imagen optimizada
+        processed_mask = postprocess_mask(mask, processing_size)
+        result_image = apply_mask_to_image(optimized_image, processed_mask)
         
         processing_time = time.time() - start_time
         
         # Registrar predicción exitosa en logs
         if image_metadata:
+            # Actualizar metadatos con información de optimización
+            if was_resized:
+                image_metadata['optimized'] = True
+                image_metadata['original_width_px'] = image.size[0]
+                image_metadata['original_height_px'] = image.size[1]
+                image_metadata['processed_width_px'] = processing_size[0]
+                image_metadata['processed_height_px'] = processing_size[1]
+            else:
+                image_metadata['optimized'] = False
+            
             log_prediction_to_blob(image_metadata, processing_time, success=True)
         
         return result_image
@@ -457,10 +573,31 @@ AZURE_CLIENT_SECRET
 AZURE_TENANT_ID
         """)
 
+initialize_model_at_startup()
+
 session = load_model()
 
 if session is None:
     st.stop()
+
+with st.sidebar:
+    st.markdown("---")
+    st.subheader("📊 Estado del Modelo")
+    
+    model_path = get_latest_model_path()
+    if model_path and os.path.exists(model_path):
+        st.success("✅ Modelo listo")
+        model_size = os.path.getsize(model_path) / (1024 * 1024)
+        st.caption(f"📁 {os.path.basename(model_path)}")
+        st.caption(f"💾 {model_size:.1f} MB")
+    else:
+        st.warning("⚠️ Modelo no disponible")
+    
+    st.markdown("---")
+    st.subheader("⚡ Optimización")
+    st.caption("📐 Imágenes > 2000px se redimensionan automáticamente")
+    st.caption("🚀 Mejora significativa en velocidad de procesamiento")
+    st.caption("📱 Mantiene calidad y proporciones originales")
 
 col1, col2 = st.columns([1, 1], gap="large")
 
@@ -514,15 +651,28 @@ with col2:
         }
         
         if st.button("🚀 Eliminar Fondo", type="primary", use_container_width=True):
+            # Verificar si la imagen será optimizada
+            _, will_be_resized = optimize_image_size(original_image, max_dimension=2000)
+            
+            if will_be_resized:
+                st.info("⚡ Imagen grande detectada. Se optimizará automáticamente para mejor rendimiento.")
+            
             with st.spinner("Procesando imagen con IA..."):
                 processed_image = process_image(original_image, session, image_metadata)
                 
                 if processed_image:
                     st.session_state.processed_image = processed_image
                     st.session_state.original_filename = uploaded_file.name
+                    st.session_state.was_optimized = will_be_resized
         
         if "processed_image" in st.session_state:
             st.image(st.session_state.processed_image, use_column_width=True)
+            
+            # Mostrar información sobre la optimización si aplica
+            if st.session_state.get("was_optimized", False):
+                original_dims = f"{original_image.size[0]} × {original_image.size[1]}"
+                processed_dims = f"{st.session_state.processed_image.size[0]} × {st.session_state.processed_image.size[1]}"
+                st.info(f"⚡ Imagen optimizada: {original_dims} → {processed_dims} px para mejor rendimiento")
             
             filename_base = st.session_state.original_filename.rsplit('.', 1)[0]
             download_filename = f"{filename_base}_no_background.png"
@@ -545,6 +695,7 @@ with col2:
 st.markdown("---")
 st.markdown(
     "**Cómo funciona:** Esta herramienta utiliza una red neuronal U2-Net para detectar y eliminar automáticamente los fondos de las imágenes. "
+    "Las imágenes grandes (>2000px) se optimizan automáticamente para mayor velocidad manteniendo la calidad. "
     "La imagen procesada tendrá un fondo transparente que podrás usar en tus proyectos."
 )
 
