@@ -15,20 +15,20 @@ class TestStreamlitComponents:
     @patch('streamlit.error')
     @patch('streamlit.info')
     @patch('streamlit.markdown')
-    @patch('app.download_model_from_azure', return_value=False)
-    @patch('app.get_latest_model_path', return_value=None)
-    def test_model_loading_error_display(self, mock_get_latest, mock_download, mock_markdown, mock_info, mock_error):
+    @patch('app.download_all_models_from_azure', return_value=False)
+    @patch('app.get_all_model_paths', return_value=[])
+    def test_model_loading_error_display(self, mock_get_paths, mock_download, mock_markdown, mock_info, mock_error):
         # Clear cache before test
         import streamlit as st
         st.cache_resource.clear()
         
-        from app import load_model
+        from app import load_all_models
         
-        result = load_model()
+        result = load_all_models()
         
-        assert result is None
-        mock_error.assert_called_once()
-        mock_info.assert_called_once()
+        assert result == {}
+        mock_error.assert_called()
+        mock_info.assert_called_with("🔍 Modelos no encontrados localmente. Intentando descargar desde Azure...")
 
 class TestImageUploadProcessing:
     
@@ -252,6 +252,65 @@ class TestInfoMessages:
             pass
         
         mock_expander.assert_called_with("ℹ️ Sobre la Tecnología")
+
+class TestMultiModelUI:
+    """Test UI components specific to multi-model functionality"""
+    
+    @patch('streamlit.selectbox')
+    def test_model_selection_dropdown(self, mock_selectbox):
+        """Test model selection dropdown functionality"""
+        mock_selectbox.return_value = "Model 1"
+        
+        from app import st
+        
+        selected = st.selectbox(
+            "Elige el modelo a usar:",
+            options=["Model 1", "Model 2"],
+            index=0,
+            help="Selecciona el modelo que mejor se adapte a tus necesidades."
+        )
+        
+        mock_selectbox.assert_called()
+        call_args = mock_selectbox.call_args
+        assert "Elige el modelo a usar:" in call_args[0]
+        assert "help" in call_args[1]
+    
+    @patch('streamlit.expander')
+    def test_model_info_expander(self, mock_expander):
+        """Test expandable model information section"""
+        mock_expander.return_value.__enter__ = Mock()
+        mock_expander.return_value.__exit__ = Mock()
+        
+        from app import st
+        
+        with st.expander("Ver todos los modelos"):
+            pass
+        
+        mock_expander.assert_called_with("Ver todos los modelos")
+    
+    @patch('streamlit.info')
+    def test_model_processing_feedback(self, mock_info):
+        """Test model processing feedback messages"""
+        from app import st
+        
+        model_name = "test_model.onnx"
+        display_name = model_name.replace('.onnx', '').replace('_', ' ').title()
+        
+        st.info(f"🤖 Procesando con modelo: **{display_name}**")
+        
+        mock_info.assert_called_with(f"🤖 Procesando con modelo: **{display_name}**")
+    
+    @patch('streamlit.success')
+    def test_model_result_attribution(self, mock_success):
+        """Test model attribution in results"""
+        from app import st
+        
+        model_name = "test_model.onnx"
+        display_name = model_name.replace('.onnx', '').replace('_', ' ').title()
+        
+        st.success(f"🤖 Procesado con: **{display_name}**")
+        
+        mock_success.assert_called_with(f"🤖 Procesado con: **{display_name}**")
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
