@@ -364,15 +364,16 @@ def load_all_models():
     """
     Carga todos los modelos ONNX disponibles para inferencia. Usa caché de Streamlit para optimizar rendimiento.
     Los modelos deberían estar disponibles localmente gracias a la inicialización al arranque.
+    También detecta y almacena el tipo de cada modelo.
     
     Retorna:
-        dict: Diccionario con sesiones de inferencia de todos los modelos disponibles, o dict vacío si falla
+        dict: Diccionario con información de modelos incluyendo sesiones y tipos, o dict vacío si falla
     """
     model_paths = get_all_model_paths()
     
     # Si hay modelos disponibles localmente
     if model_paths:
-        sessions = {}
+        model_info = {}
         loaded_models = []
         failed_models = []
         
@@ -380,19 +381,35 @@ def load_all_models():
             try:
                 session = ort.InferenceSession(model_path)
                 model_name = os.path.basename(model_path)
-                sessions[model_name] = session
-                loaded_models.append(model_name)
+                model_type = detect_model_type(model_path)
+                input_size = get_model_input_size(model_type)
+                
+                model_info[model_name] = {
+                    'session': session,
+                    'type': model_type,
+                    'input_size': input_size,
+                    'path': model_path
+                }
+                loaded_models.append(f"{model_name} ({model_type}, {input_size[0]}x{input_size[1]})")
             except Exception as e:
                 failed_models.append(f"{os.path.basename(model_path)}: {str(e)}")
         
         if loaded_models:
             st.success(f"🎯 {len(loaded_models)} modelo(s) cargado(s) exitosamente!")
+            # Mostrar información detallada de los modelos cargados
+            with st.expander("Ver detalles de modelos cargados"):
+                for model_name, info in model_info.items():
+                    st.text(f"✓ {model_name}")
+                    st.text(f"  Tipo: {info['type']}")
+                    st.text(f"  Resolución de entrada: {info['input_size'][0]}x{info['input_size'][1]}")
+                    st.text("")
+            
             if failed_models:
                 st.warning(f"⚠️ {len(failed_models)} modelo(s) fallaron al cargar")
                 with st.expander("Ver errores de carga"):
                     for error in failed_models:
                         st.code(error)
-            return sessions
+            return model_info
         else:
             st.error("❌ No se pudo cargar ningún modelo local")
             if failed_models:
@@ -416,7 +433,7 @@ def load_all_models():
     # Intentar cargar después de la descarga
     model_paths = get_all_model_paths()
     if model_paths:
-        sessions = {}
+        model_info = {}
         loaded_models = []
         failed_models = []
         
@@ -424,16 +441,30 @@ def load_all_models():
             try:
                 session = ort.InferenceSession(model_path)
                 model_name = os.path.basename(model_path)
-                sessions[model_name] = session
-                loaded_models.append(model_name)
+                model_type = detect_model_type(model_path)
+                input_size = get_model_input_size(model_type)
+                
+                model_info[model_name] = {
+                    'session': session,
+                    'type': model_type,
+                    'input_size': input_size,
+                    'path': model_path
+                }
+                loaded_models.append(f"{model_name} ({model_type}, {input_size[0]}x{input_size[1]})")
             except Exception as e:
                 failed_models.append(f"{os.path.basename(model_path)}: {str(e)}")
         
         if loaded_models:
             st.success(f"🎯 {len(loaded_models)} modelo(s) cargado(s) después de la descarga!")
+            with st.expander("Ver detalles de modelos cargados"):
+                for model_name, info in model_info.items():
+                    st.text(f"✓ {model_name}")
+                    st.text(f"  Tipo: {info['type']}")
+                    st.text(f"  Resolución de entrada: {info['input_size'][0]}x{info['input_size'][1]}")
+                    st.text("")
             if failed_models:
                 st.warning(f"⚠️ {len(failed_models)} modelo(s) fallaron al cargar")
-            return sessions
+            return model_info
         else:
             st.error("❌ No se pudo cargar ningún modelo después de la descarga")
             return {}
@@ -441,22 +472,92 @@ def load_all_models():
     st.error("❌ No se encontraron modelos después de la descarga")
     return {}
 
-def preprocess_image(image: Image.Image) -> np.ndarray:
+def detect_model_type(model_path: str) -> str:
     """
-    Preprocesa la imagen para el modelo U2-Net.
+    Detecta el tipo de modelo basado en el nombre del archivo.
+    
+    Args:
+        model_path (str): Ruta del modelo
+        
+    Retorna:
+        str: Tipo de modelo ('u2net', 'isnet', 'u2netp', 'unknown')
+    """
+    model_name = os.path.basename(model_path).lower()
+    
+    if 'isnet' in model_name or 'general-use' in model_name:
+        return 'isnet'
+    elif 'u2net' in model_name:
+        if 'u2netp' in model_name or 'small' in model_name or 'lite' in model_name:
+            return 'u2netp'
+        else:
+            return 'u2net'
+    else:
+        # Por defecto, asumir U2-Net si no se puede detectar
+        return 'u2net'
+
+def get_model_input_size(model_type: str) -> tuple:
+    """
+    Retorna el tamaño de entrada requerido para cada tipo de modelo.
+    
+    Args:
+        model_type (str): Tipo de modelo
+        
+    Retorna:
+        tuple: (ancho, alto) del tamaño de entrada requerido
+    """
+    size_map = {
+        'u2net': (320, 320),
+        'u2netp': (320, 320), 
+        'isnet': (1024, 1024),
+    }
+    return size_map.get(model_type, (320, 320))
+
+def get_model_normalization(model_type: str) -> tuple:
+    """
+    Retorna los valores de normalización para cada tipo de modelo.
+    
+    Args:
+        model_type (str): Tipo de modelo
+        
+    Retorna:
+        tuple: (mean, std) para la normalización
+    """
+    if model_type == 'isnet':
+        # IS-Net usa normalización diferente
+        mean = [0.5, 0.5, 0.5]
+        std = [1.0, 1.0, 1.0]
+    else:
+        # U2-Net y U2-NetP usan normalización estándar
+        mean = [0.485, 0.456, 0.406]  # ImageNet mean
+        std = [0.229, 0.224, 0.225]   # ImageNet std
+    
+    return mean, std
+
+def preprocess_image_for_model(image: Image.Image, model_type: str) -> np.ndarray:
+    """
+    Preprocesa la imagen según el tipo de modelo especificado.
     
     Args:
         image (PIL.Image): Imagen de entrada
+        model_type (str): Tipo de modelo ('u2net', 'isnet', 'u2netp')
         
     Retorna:
         np.ndarray: Array de imagen preprocesada para el modelo
     """
-    # Convertir a RGB y redimensionar a 320x320 (tamaño esperado por U2-Net)
-    img = image.convert('RGB')
-    img = img.resize((320, 320))
+    # Obtener tamaño de entrada y normalización según el modelo
+    input_size = get_model_input_size(model_type)
+    mean, std = get_model_normalization(model_type)
     
-    # Normalizar valores de píxel a rango [0, 1]
+    # Convertir a RGB y redimensionar según el modelo
+    img = image.convert('RGB')
+    img = img.resize(input_size, Image.Resampling.BILINEAR)
+    
+    # Convertir a array y normalizar
     img_array = np.array(img).astype(np.float32) / 255.0
+    
+    # Aplicar normalización específica del modelo
+    for i in range(3):
+        img_array[:, :, i] = (img_array[:, :, i] - mean[i]) / std[i]
     
     # Cambiar orden de dimensiones de HWC a CHW (canales primero)
     img_array = np.transpose(img_array, (2, 0, 1))
@@ -464,6 +565,19 @@ def preprocess_image(image: Image.Image) -> np.ndarray:
     # Agregar dimensión de batch
     img_array = np.expand_dims(img_array, axis=0)
     return img_array
+
+def preprocess_image(image: Image.Image, model_type: str = 'u2net') -> np.ndarray:
+    """
+    Función de compatibilidad hacia atrás que usa la nueva función de preprocesamiento.
+    
+    Args:
+        image (PIL.Image): Imagen de entrada
+        model_type (str): Tipo de modelo, por defecto 'u2net'
+        
+    Retorna:
+        np.ndarray: Array de imagen preprocesada para el modelo
+    """
+    return preprocess_image_for_model(image, model_type)
 
 def postprocess_mask(mask: np.ndarray, original_size: tuple) -> np.ndarray:
     """
@@ -537,13 +651,14 @@ def optimize_image_size(image: Image.Image, max_dimension: int = 2000) -> tuple[
     
     return resized_image, True
 
-def process_image(image: Image.Image, session, image_metadata=None):
+def process_image(image: Image.Image, model_info, image_metadata=None):
     """
     Procesa una imagen completa: optimización de tamaño, preprocesamiento, inferencia y postprocesamiento.
+    Automáticamente detecta el tipo de modelo y aplica el preprocesamiento apropiado.
     
     Args:
         image (PIL.Image): Imagen de entrada
-        session: Sesión de inferencia ONNX
+        model_info (dict): Información del modelo que incluye sesión, tipo e input_size
         image_metadata (dict, optional): Metadatos para logging
         
     Retorna:
@@ -552,24 +667,40 @@ def process_image(image: Image.Image, session, image_metadata=None):
     start_time = time.time()
     
     try:
+        # Extraer información del modelo
+        session = model_info['session']
+        model_type = model_info['type']
+        required_input_size = model_info['input_size']
+        
         # Optimizar tamaño de imagen para mejor rendimiento
-        optimized_image, was_resized = optimize_image_size(image, max_dimension=2000)
+        # Para modelos IS-Net (1024x1024), usar un límite más alto
+        max_dimension = 3000 if model_type == 'isnet' else 2000
+        optimized_image, was_resized = optimize_image_size(image, max_dimension=max_dimension)
         
         if was_resized:
-            original_size = image.size
-            optimized_size = optimized_image.size
-            print(f"[PROCESSING] Imagen redimensionada: {original_size} → {optimized_size} para mejor rendimiento")
+            original_dims = f"{image.size[0]} × {image.size[1]}"
+            optimized_dims = f"{optimized_image.size[0]} × {optimized_image.size[1]}"
+            print(f"[PROCESSING] Imagen redimensionada: {original_dims} → {optimized_dims} para mejor rendimiento")
         
         # Usar la imagen optimizada para el procesamiento
         processing_size = optimized_image.size
         
-        # Preprocesar imagen para el modelo
-        input_array = preprocess_image(optimized_image)
+        # Preprocesar imagen según el tipo de modelo
+        input_array = preprocess_image_for_model(optimized_image, model_type)
+        
+        print(f"[PROCESSING] Usando modelo tipo '{model_type}' con entrada {required_input_size[0]}x{required_input_size[1]}")
         
         # Ejecutar inferencia del modelo
         inputs = {session.get_inputs()[0].name: input_array}
         outputs = session.run(None, inputs)
-        mask = outputs[0]
+        
+        # Para IS-Net, usar la primera salida del primer elemento (estructura diferente)
+        if model_type == 'isnet':
+            # IS-Net retorna múltiples salidas, usar la primera
+            mask = outputs[0][0] if isinstance(outputs[0], list) else outputs[0]
+        else:
+            # U2-Net y U2-NetP usan la primera salida directamente
+            mask = outputs[0]
         
         # Postprocesar máscara y aplicar a la imagen optimizada
         processed_mask = postprocess_mask(mask, processing_size)
@@ -579,7 +710,7 @@ def process_image(image: Image.Image, session, image_metadata=None):
         
         # Registrar predicción exitosa en logs
         if image_metadata:
-            # Actualizar metadatos con información de optimización
+            # Actualizar metadatos con información de optimización y modelo
             if was_resized:
                 image_metadata['optimized'] = True
                 image_metadata['original_width_px'] = image.size[0]
@@ -588,6 +719,10 @@ def process_image(image: Image.Image, session, image_metadata=None):
                 image_metadata['processed_height_px'] = processing_size[1]
             else:
                 image_metadata['optimized'] = False
+            
+            # Agregar información del modelo
+            image_metadata['model_type'] = model_type
+            image_metadata['model_input_size'] = f"{required_input_size[0]}x{required_input_size[1]}"
             
             log_prediction_to_blob(image_metadata, processing_time, success=True)
         
@@ -598,6 +733,9 @@ def process_image(image: Image.Image, session, image_metadata=None):
         
         # Registrar predicción fallida en logs
         if image_metadata:
+            if 'model_info' in locals():
+                image_metadata['model_type'] = model_info.get('type', 'unknown')
+                image_metadata['model_input_size'] = f"{model_info.get('input_size', (0, 0))[0]}x{model_info.get('input_size', (0, 0))[1]}"
             log_prediction_to_blob(image_metadata, processing_time, success=False, error_message=error_message)
         
         st.error(f"Error al procesar la imagen: {error_message}")
@@ -654,9 +792,9 @@ AZURE_TENANT_ID
 
 initialize_models_at_startup()
 
-session = load_all_models()
+model_info = load_all_models()
 
-if not session:
+if not model_info:
     st.stop()
 
 with st.sidebar:
@@ -664,13 +802,17 @@ with st.sidebar:
     st.subheader("🤖 Selección de Modelo")
     
     model_paths = get_all_model_paths()
-    if model_paths and session:
+    if model_paths and model_info:
         # Crear opciones para el selector de modelos
         model_options = {}
         for model_path in model_paths:
-            model_info = get_model_info(model_path)
-            if model_info and model_info['name'] in session:
-                model_options[model_info['display_name']] = model_info['name']
+            model_file_info = get_model_info(model_path)
+            if model_file_info and model_file_info['name'] in model_info:
+                model_name = model_file_info['name']
+                model_type = model_info[model_name]['type']
+                input_size = model_info[model_name]['input_size']
+                display_name = f"{model_file_info['display_name']} ({model_type.upper()}, {input_size[0]}x{input_size[1]})"
+                model_options[display_name] = model_name
         
         if len(model_options) > 1:
             # Si hay múltiples modelos, mostrar selector
@@ -678,12 +820,12 @@ with st.sidebar:
                 "Elige el modelo a usar:",
                 options=list(model_options.keys()),
                 index=0,
-                help="Selecciona el modelo que mejor se adapte a tus necesidades. Puedes cambiar entre modelos sin reiniciar la aplicación."
+                help="Selecciona el modelo que mejor se adapte a tus necesidades. Los modelos IS-Net (1024x1024) ofrecen mejor calidad pero requieren más procesamiento."
             )
             selected_model_name = model_options[selected_model_display]
             st.session_state.selected_model = selected_model_name
             
-            # Mostrar información del modelo seleccionado
+            # Mostrar información detallada del modelo seleccionado
             selected_model_path = None
             for path in model_paths:
                 if os.path.basename(path) == selected_model_name:
@@ -691,11 +833,14 @@ with st.sidebar:
                     break
             
             if selected_model_path:
-                model_info = get_model_info(selected_model_path)
-                if model_info:
-                    st.info(f"📁 **{model_info['display_name']}**")
-                    st.caption(f"💾 Tamaño: {model_info['size_mb']} MB")
-                    st.caption(f"📅 Modificado: {model_info['modified_time'].strftime('%Y-%m-%d %H:%M')}")
+                model_file_info = get_model_info(selected_model_path)
+                selected_model_info = model_info[selected_model_name]
+                if model_file_info:
+                    st.info(f"📁 **{model_file_info['display_name']}**")
+                    st.caption(f"💾 Tamaño: {model_file_info['size_mb']} MB")
+                    st.caption(f"🏷️ Tipo: {selected_model_info['type'].upper()}")
+                    st.caption(f"� Entrada: {selected_model_info['input_size'][0]}x{selected_model_info['input_size'][1]} px")
+                    st.caption(f"�📅 Modificado: {model_file_info['modified_time'].strftime('%Y-%m-%d %H:%M')}")
         else:
             # Si solo hay un modelo, mostrarlo automáticamente
             single_model_name = list(model_options.values())[0]
@@ -709,19 +854,32 @@ with st.sidebar:
                     break
             
             if single_model_path:
-                model_info = get_model_info(single_model_path)
-                if model_info:
-                    st.caption(f"� Tamaño: {model_info['size_mb']} MB")
-                    st.caption(f"📅 Modificado: {model_info['modified_time'].strftime('%Y-%m-%d %H:%M')}")
+                model_file_info = get_model_info(single_model_path)
+                selected_model_info = model_info[single_model_name]
+                if model_file_info:
+                    st.caption(f"💾 Tamaño: {model_file_info['size_mb']} MB")
+                    st.caption(f"🏷️ Tipo: {selected_model_info['type'].upper()}")
+                    st.caption(f"📐 Entrada: {selected_model_info['input_size'][0]}x{selected_model_info['input_size'][1]} px")
+                    st.caption(f"📅 Modificado: {model_file_info['modified_time'].strftime('%Y-%m-%d %H:%M')}")
         
         # Mostrar resumen de todos los modelos disponibles
         with st.expander("Ver todos los modelos"):
             st.subheader("📊 Estado de los Modelos")
             for model_path in model_paths:
-                model_info = get_model_info(model_path)
-                if model_info:
-                    status = "✅ Cargado" if model_info['name'] in session else "❌ Error"
-                    st.text(f"{status} {model_info['display_name']} ({model_info['size_mb']} MB)")
+                model_file_info = get_model_info(model_path)
+                if model_file_info:
+                    model_name = model_file_info['name']
+                    if model_name in model_info:
+                        status = "✅ Cargado"
+                        model_type = model_info[model_name]['type']
+                        input_size = model_info[model_name]['input_size']
+                        st.text(f"{status} {model_file_info['display_name']}")
+                        st.text(f"  Tipo: {model_type.upper()}")
+                        st.text(f"  Entrada: {input_size[0]}x{input_size[1]} px")
+                        st.text(f"  Tamaño: {model_file_info['size_mb']} MB")
+                        st.text("")
+                    else:
+                        st.text(f"❌ Error {model_file_info['display_name']}")
     else:
         st.warning("⚠️ Modelos no disponibles")
         if 'selected_model' in st.session_state:
@@ -729,8 +887,8 @@ with st.sidebar:
     
     st.markdown("---")
     st.subheader("⚡ Optimización")
-    st.caption("📐 Imágenes > 2000px se redimensionan automáticamente")
-    st.caption("🚀 Mejora significativa en velocidad de procesamiento")
+    st.caption("📐 Imágenes grandes se redimensionan automáticamente")
+    st.caption("🚀 IS-Net: hasta 3000px, U2-Net: hasta 2000px")
     st.caption("📱 Mantiene calidad y proporciones originales")
 
 col1, col2 = st.columns([1, 1], gap="large")
@@ -791,11 +949,11 @@ with col2:
                 st.stop()
             
             selected_model_name = st.session_state.selected_model
-            if selected_model_name not in session:
+            if selected_model_name not in model_info:
                 st.error(f"❌ El modelo seleccionado '{selected_model_name}' no está disponible.")
                 st.stop()
             
-            selected_session = session[selected_model_name]
+            selected_model_info = model_info[selected_model_name]
             
             # Verificar si la imagen será optimizada
             _, will_be_resized = optimize_image_size(original_image, max_dimension=2000)
@@ -810,7 +968,7 @@ with col2:
                 # Actualizar metadatos con información del modelo
                 image_metadata['model_used'] = selected_model_name
                 
-                processed_image = process_image(original_image, selected_session, image_metadata)
+                processed_image = process_image(original_image, selected_model_info, image_metadata)
                 
                 if processed_image:
                     st.session_state.processed_image = processed_image
