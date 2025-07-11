@@ -5,7 +5,7 @@ import numpy as np
 
 from PIL import Image
 from typing import Tuple
-from app import load_all_models, preprocess_image, process_image
+from app import load_all_models, preprocess_image_for_model, process_image
 
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
 
@@ -15,14 +15,14 @@ class TestModelResponsiveness:
     @pytest.fixture
     def model_sessions(self):
         """Load all available models and return the dictionary"""
-        sessions = load_all_models()
-        if not sessions:
+        model_info = load_all_models()
+        if not model_info:
             pytest.skip("No hay modelos disponibles para pruebas")
-        return sessions
+        return model_info
     
     @pytest.fixture
-    def single_model_session(self, model_sessions):
-        """Get a single model session for tests that need just one model"""
+    def single_model_info(self, model_sessions):
+        """Get a single model info for tests that need just one model"""
         # Use the first available model
         model_name = list(model_sessions.keys())[0]
         return model_sessions[model_name]
@@ -34,54 +34,76 @@ class TestModelResponsiveness:
     def test_models_load_successfully(self, model_sessions):
         """Test that at least one model loads successfully"""
         assert len(model_sessions) > 0
-        for model_name, session in model_sessions.items():
-            assert session is not None
+        for model_name, model_info in model_sessions.items():
+            assert model_info is not None
+            assert 'session' in model_info
+            assert 'type' in model_info
+            assert 'input_size' in model_info
+            session = model_info['session']
             assert hasattr(session, 'get_inputs')
             assert hasattr(session, 'run')
     
     def test_all_models_have_correct_input_shape(self, model_sessions):
         """Test that all loaded models have the expected input shape"""
-        for model_name, session in model_sessions.items():
+        for model_name, model_info in model_sessions.items():
+            session = model_info['session']
+            model_type = model_info['type']
+            expected_input_size = model_info['input_size']
+            
             inputs = session.get_inputs()
             assert len(inputs) == 1, f"Model {model_name} should have exactly one input"
             
             input_shape = inputs[0].shape
             assert len(input_shape) == 4, f"Model {model_name} input should be 4D"
             assert input_shape[1] == 3, f"Model {model_name} should expect 3 channels"
-            assert input_shape[2] == 320, f"Model {model_name} should expect height 320"
-            assert input_shape[3] == 320, f"Model {model_name} should expect width 320"
+            assert input_shape[2] == expected_input_size[1], f"Model {model_name} should expect height {expected_input_size[1]}"
+            assert input_shape[3] == expected_input_size[0], f"Model {model_name} should expect width {expected_input_size[0]}"
     
-    def test_single_model_output_shape(self, single_model_session, test_image):
+    def test_single_model_output_shape(self, single_model_info, test_image):
         """Test output shape using a single model"""
-        preprocessed = preprocess_image(test_image)
-        inputs = {single_model_session.get_inputs()[0].name: preprocessed}
+        session = single_model_info['session']
+        model_type = single_model_info['type']
+        expected_input_size = single_model_info['input_size']
         
-        outputs = single_model_session.run(None, inputs)
+        preprocessed = preprocess_image_for_model(test_image, model_type)
+        inputs = {session.get_inputs()[0].name: preprocessed}
+        
+        outputs = session.run(None, inputs)
         
         assert len(outputs) >= 1, "El modelo debe devolver al menos un parámetro de salida"
         main_output = outputs[0]
-        assert main_output.shape == (1, 1, 320, 320)
+        if model_type == 'isnet' and isinstance(main_output, list):
+            main_output = main_output[0]  # Handle IS-Net nested output
+        assert main_output.shape == (1, 1, expected_input_size[1], expected_input_size[0])
         assert main_output.dtype == np.float32
     
-    def test_single_model_output_range(self, single_model_session, test_image):
+    def test_single_model_output_range(self, single_model_info, test_image):
         """Test output value range using a single model"""
-        preprocessed = preprocess_image(test_image)
-        inputs = {single_model_session.get_inputs()[0].name: preprocessed}
+        session = single_model_info['session']
+        model_type = single_model_info['type']
         
-        outputs = single_model_session.run(None, inputs)
+        preprocessed = preprocess_image_for_model(test_image, model_type)
+        inputs = {session.get_inputs()[0].name: preprocessed}
+        
+        outputs = session.run(None, inputs)
         output = outputs[0]
+        if model_type == 'isnet' and isinstance(output, list):
+            output = output[0]  # Handle IS-Net nested output
         
         assert 0 <= output.min() <= output.max() <= 1
     
-    def test_single_model_inference_time(self, single_model_session, test_image):
+    def test_single_model_inference_time(self, single_model_info, test_image):
         """Test inference time using a single model"""
         import time
         
-        preprocessed = preprocess_image(test_image)
-        inputs = {single_model_session.get_inputs()[0].name: preprocessed}
+        session = single_model_info['session']
+        model_type = single_model_info['type']
+        
+        preprocessed = preprocess_image_for_model(test_image, model_type)
+        inputs = {session.get_inputs()[0].name: preprocessed}
         
         start_time = time.time()
-        outputs = single_model_session.run(None, inputs)
+        outputs = session.run(None, inputs)
         end_time = time.time()
         
         inference_time = end_time - start_time
@@ -93,14 +115,14 @@ class TestModelMetricStability:
     @pytest.fixture
     def model_sessions(self):
         """Load all available models"""
-        sessions = load_all_models()
-        if not sessions:
+        model_info = load_all_models()
+        if not model_info:
             pytest.skip("No hay modelos disponibles para pruebas")
-        return sessions
+        return model_info
     
     @pytest.fixture
-    def single_model_session(self, model_sessions):
-        """Get a single model session for tests that need just one model"""
+    def single_model_info(self, model_sessions):
+        """Get a single model info for tests that need just one model"""
         model_name = list(model_sessions.keys())[0]
         return model_sessions[model_name]
     
@@ -116,14 +138,14 @@ class TestModelMetricStability:
         
         return intersection / union
     
-    def create_synthetic_test_case(self) -> Tuple[Image.Image, np.ndarray]:
-        image = Image.new('RGB', (320, 320), color=(128, 128, 128))
+    def create_synthetic_test_case(self, size=(320, 320)) -> Tuple[Image.Image, np.ndarray]:
+        image = Image.new('RGB', size, color=(128, 128, 128))
         
         image_array = np.array(image)
-        center_x, center_y = 160, 160
-        radius = 80
+        center_x, center_y = size[0] // 2, size[1] // 2
+        radius = min(size) // 4
         
-        y, x = np.ogrid[:320, :320]
+        y, x = np.ogrid[:size[1], :size[0]]
         mask_circle = (x - center_x)**2 + (y - center_y)**2 <= radius**2
         
         image_array[mask_circle] = [255, 255, 255]
@@ -134,30 +156,43 @@ class TestModelMetricStability:
         
         return synthetic_image, ground_truth
     
-    def test_synthetic_high_contrast_iou(self, single_model_session):
+    def test_synthetic_high_contrast_iou(self, single_model_info):
         """Test IoU using a single model on synthetic data"""
-        test_image, gt_mask = self.create_synthetic_test_case()
+        # Create test case with appropriate size for the model
+        model_type = single_model_info['type']
+        input_size = single_model_info['input_size']
+        session = single_model_info['session']
         
-        preprocessed = preprocess_image(test_image)
-        inputs = {single_model_session.get_inputs()[0].name: preprocessed}
-        outputs = single_model_session.run(None, inputs)
+        test_image, gt_mask = self.create_synthetic_test_case(input_size)
         
-        pred_mask = outputs[0].squeeze()
+        preprocessed = preprocess_image_for_model(test_image, model_type)
+        inputs = {session.get_inputs()[0].name: preprocessed}
+        outputs = session.run(None, inputs)
+        
+        pred_mask = outputs[0]
+        if model_type == 'isnet' and isinstance(pred_mask, list):
+            pred_mask = pred_mask[0]  # Handle IS-Net nested output
+        pred_mask = pred_mask.squeeze()
         
         iou = self.calculate_iou(pred_mask, gt_mask)
         
         assert iou > 0.3, f"IoU {iou} está por debajo del umbral mínimo de 0.3"
     
-    def test_model_consistency_multiple_runs(self, single_model_session):
+    def test_model_consistency_multiple_runs(self, single_model_info):
         """Test consistency across multiple runs with the same model"""
         test_image = Image.new('RGB', (256, 256), color=(200, 150, 100))
+        session = single_model_info['session']
+        model_type = single_model_info['type']
         
         results = []
         for _ in range(3):
-            preprocessed = preprocess_image(test_image)
-            inputs = {single_model_session.get_inputs()[0].name: preprocessed}
-            outputs = single_model_session.run(None, inputs)
-            results.append(outputs[0])
+            preprocessed = preprocess_image_for_model(test_image, model_type)
+            inputs = {session.get_inputs()[0].name: preprocessed}
+            outputs = session.run(None, inputs)
+            result = outputs[0]
+            if model_type == 'isnet' and isinstance(result, list):
+                result = result[0]  # Handle IS-Net nested output
+            results.append(result)
         
         for i in range(1, len(results)):
             np.testing.assert_array_almost_equal(
@@ -165,7 +200,7 @@ class TestModelMetricStability:
                 err_msg="Las salidas del modelo no son consistentes entre ejecuciones"
             )
     
-    def test_different_image_sizes_consistency(self, single_model_session):
+    def test_different_image_sizes_consistency(self, single_model_info):
         """Test consistency across different image sizes with a single model"""
         sizes = [(100, 100), (256, 256), (512, 384)]
         ious = []
@@ -173,7 +208,7 @@ class TestModelMetricStability:
         for size in sizes:
             test_image = Image.new('RGB', size, color=(255, 255, 255))
             
-            result = process_image(test_image, single_model_session)
+            result = process_image(test_image, single_model_info)
             if result:
                 result_array = np.array(result)
                 alpha_channel = result_array[:, :, 3] / 255.0
@@ -194,8 +229,8 @@ class TestModelMetricStability:
         test_image = Image.new('RGB', (256, 256), color=(200, 150, 100))
         results = {}
         
-        for model_name, session in model_sessions.items():
-            result = process_image(test_image, session)
+        for model_name, model_info in model_sessions.items():
+            result = process_image(test_image, model_info)
             if result:
                 results[model_name] = result
         
@@ -212,55 +247,55 @@ class TestModelRobustness:
     @pytest.fixture
     def model_sessions(self):
         """Load all available models"""
-        sessions = load_all_models()
-        if not sessions:
+        model_info = load_all_models()
+        if not model_info:
             pytest.skip("No hay modelos disponibles para pruebas")
-        return sessions
+        return model_info
     
     @pytest.fixture
-    def single_model_session(self, model_sessions):
-        """Get a single model session for edge case tests"""
+    def single_model_info(self, model_sessions):
+        """Get a single model info for edge case tests"""
         model_name = list(model_sessions.keys())[0]
         return model_sessions[model_name]
     
-    def test_edge_case_black_image(self, single_model_session):
+    def test_edge_case_black_image(self, single_model_info):
         black_image = Image.new('RGB', (200, 200), color=(0, 0, 0))
         
-        result = process_image(black_image, single_model_session)
+        result = process_image(black_image, single_model_info)
         
         assert result is not None
         assert result.mode == 'RGBA'
         assert result.size == (200, 200)
     
-    def test_edge_case_white_image(self, single_model_session):
+    def test_edge_case_white_image(self, single_model_info):
         white_image = Image.new('RGB', (200, 200), color=(255, 255, 255))
         
-        result = process_image(white_image, single_model_session)
+        result = process_image(white_image, single_model_info)
         
         assert result is not None
         assert result.mode == 'RGBA'
         assert result.size == (200, 200)
     
-    def test_edge_case_small_image(self, single_model_session):
+    def test_edge_case_small_image(self, single_model_info):
         small_image = Image.new('RGB', (50, 50), color=(128, 128, 128))
         
-        result = process_image(small_image, single_model_session)
+        result = process_image(small_image, single_model_info)
         
         assert result is not None
         assert result.size == (50, 50)
     
-    def test_edge_case_rectangular_image(self, single_model_session):
+    def test_edge_case_rectangular_image(self, single_model_info):
         rect_image = Image.new('RGB', (400, 200), color=(100, 150, 200))
         
-        result = process_image(rect_image, single_model_session)
+        result = process_image(rect_image, single_model_info)
         
         assert result is not None
         assert result.size == (400, 200)
     
-    def test_grayscale_converted_to_rgb(self, single_model_session):
+    def test_grayscale_converted_to_rgb(self, single_model_info):
         gray_image = Image.new('L', (150, 150), color=128)
         
-        result = process_image(gray_image, single_model_session)
+        result = process_image(gray_image, single_model_info)
         
         assert result is not None
         assert result.mode == 'RGBA'
@@ -273,9 +308,9 @@ class TestModelRobustness:
             Image.new('L', (100, 100), color=128),              # Grayscale
         ]
         
-        for model_name, session in model_sessions.items():
+        for model_name, model_info in model_sessions.items():
             for i, test_image in enumerate(edge_case_images):
-                result = process_image(test_image, session)
+                result = process_image(test_image, model_info)
                 assert result is not None, f"Model {model_name} failed on edge case {i}"
                 assert result.mode == 'RGBA'
 
@@ -285,18 +320,18 @@ class TestModelPerformance:
     @pytest.fixture
     def model_sessions(self):
         """Load all available models"""
-        sessions = load_all_models()
-        if not sessions:
+        model_info = load_all_models()
+        if not model_info:
             pytest.skip("No hay modelos disponibles para pruebas")
-        return sessions
+        return model_info
     
     @pytest.fixture
-    def single_model_session(self, model_sessions):
-        """Get a single model session for performance tests"""
+    def single_model_info(self, model_sessions):
+        """Get a single model info for performance tests"""
         model_name = list(model_sessions.keys())[0]
         return model_sessions[model_name]
     
-    def test_batch_processing_performance(self, single_model_session):
+    def test_batch_processing_performance(self, single_model_info):
         """Test performance with batch processing using a single model"""
         import time
         
@@ -305,7 +340,7 @@ class TestModelPerformance:
         start_time = time.time()
         results = []
         for image in images:
-            result = process_image(image, single_model_session)
+            result = process_image(image, single_model_info)
             results.append(result)
         end_time = time.time()
         
@@ -315,13 +350,13 @@ class TestModelPerformance:
         assert all(r is not None for r in results)
         assert avg_time_per_image < 5.0
     
-    def test_memory_usage_stability(self, single_model_session):
+    def test_memory_usage_stability(self, single_model_info):
         """Test memory stability with repeated processing"""
         import gc
         
         for i in range(10):
             test_image = Image.new('RGB', (300, 300), color=(i*25, i*25, i*25))
-            result = process_image(test_image, single_model_session)
+            result = process_image(test_image, single_model_info)
             assert result is not None
             
             del result
@@ -337,9 +372,9 @@ class TestModelPerformance:
         test_image = Image.new('RGB', (300, 300), color=(128, 128, 128))
         performance_results = {}
         
-        for model_name, session in model_sessions.items():
+        for model_name, model_info in model_sessions.items():
             start_time = time.time()
-            result = process_image(test_image, session)
+            result = process_image(test_image, model_info)
             end_time = time.time()
             
             processing_time = end_time - start_time

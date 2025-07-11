@@ -673,9 +673,8 @@ def process_image(image: Image.Image, model_info, image_metadata=None):
         required_input_size = model_info['input_size']
         
         # Optimizar tamaño de imagen para mejor rendimiento
-        # Para modelos IS-Net (1024x1024), usar un límite más alto
-        max_dimension = 3000 if model_type == 'isnet' else 2000
-        optimized_image, was_resized = optimize_image_size(image, max_dimension=max_dimension)
+        # Usar límite estándar de 2000px para todos los modelos
+        optimized_image, was_resized = optimize_image_size(image, max_dimension=2000)
         
         if was_resized:
             original_dims = f"{image.size[0]} × {image.size[1]}"
@@ -840,7 +839,7 @@ with st.sidebar:
                     st.caption(f"💾 Tamaño: {model_file_info['size_mb']} MB")
                     st.caption(f"🏷️ Tipo: {selected_model_info['type'].upper()}")
                     st.caption(f"� Entrada: {selected_model_info['input_size'][0]}x{selected_model_info['input_size'][1]} px")
-                    st.caption(f"�📅 Modificado: {model_file_info['modified_time'].strftime('%Y-%m-%d %H:%M')}")
+                    st.caption(f"�� Modificado: {model_file_info['modified_time'].strftime('%Y-%m-%d %H:%M')}")
         else:
             # Si solo hay un modelo, mostrarlo automáticamente
             single_model_name = list(model_options.values())[0]
@@ -887,8 +886,8 @@ with st.sidebar:
     
     st.markdown("---")
     st.subheader("⚡ Optimización")
-    st.caption("📐 Imágenes grandes se redimensionan automáticamente")
-    st.caption("🚀 IS-Net: hasta 3000px, U2-Net: hasta 2000px")
+    st.caption("📐 Imágenes > 2000px se redimensionan automáticamente")
+    st.caption("🚀 Mejora significativa en velocidad de procesamiento")
     st.caption("📱 Mantiene calidad y proporciones originales")
 
 col1, col2 = st.columns([1, 1], gap="large")

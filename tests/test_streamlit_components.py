@@ -162,10 +162,19 @@ class TestErrorHandlingUI:
         from app import process_image
         
         test_image = TestImageGenerator.create_solid_color_image((100, 100), (128, 128, 128))
+        
+        # Create mock model_info with broken session
         broken_session = Mock()
         broken_session.get_inputs.side_effect = Exception("Model error")
         
-        result = process_image(test_image, broken_session)
+        mock_model_info = {
+            'session': broken_session,
+            'type': 'u2net',
+            'input_size': (320, 320),
+            'path': 'models/production/test_u2net.onnx'
+        }
+        
+        result = process_image(test_image, mock_model_info)
         
         assert result is None
         mock_error.assert_called_once()
