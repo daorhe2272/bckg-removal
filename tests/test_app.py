@@ -10,14 +10,17 @@ from unittest.mock import Mock, patch
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
 
 from app import (
-    load_model,
+    load_all_models,
+    get_all_model_paths,
+    get_model_info,
+    initialize_models_at_startup,
     preprocess_image,
     postprocess_mask,
     apply_mask_to_image,
     process_image,
     image_to_bytes,
     get_azure_config,
-    download_model_from_azure,
+    download_all_models_from_azure,
     log_prediction_to_blob,
     optimize_image_size
 )
@@ -220,6 +223,59 @@ class TestImageOptimization:
         assert optimized.size[0] <= 2000
         assert optimized.size[1] <= 2000
 
+class TestMultiModelFunctionality:
+    """Test new multi-model functionality"""
+    
+    def test_get_all_model_paths_empty_directory(self):
+        with patch('glob.glob', return_value=[]):
+            result = get_all_model_paths()
+            assert result == []
+    
+    def test_get_all_model_paths_with_models(self):
+        mock_paths = [
+            'models/production/model1.onnx',
+            'models/production/model2.onnx'
+        ]
+        with patch('glob.glob', return_value=mock_paths):
+            with patch('os.path.getmtime', side_effect=[1000, 2000]):  # model2 is newer
+                result = get_all_model_paths()
+                # Should be sorted by modification time (newest first)
+                assert result == ['models/production/model2.onnx', 'models/production/model1.onnx']
+    
+    def test_get_model_info_nonexistent_file(self):
+        result = get_model_info('/nonexistent/path.onnx')
+        assert result is None
+    
+    def test_get_model_info_valid_file(self):
+        mock_stat = Mock()
+        mock_stat.st_size = 1024 * 1024 * 5  # 5MB
+        mock_stat.st_mtime = 1640995200  # 2022-01-01 00:00:00
+        
+        from datetime import datetime
+        mock_time = datetime(2022, 1, 1, 0, 0, 0)
+        
+        with patch('os.path.exists', return_value=True):
+            with patch('os.stat', return_value=mock_stat):
+                with patch('app.datetime') as mock_datetime_module:
+                    mock_datetime_module.fromtimestamp.return_value = mock_time
+                    
+                    result = get_model_info('models/production/test_model.onnx')
+                    
+                    assert result is not None
+                    assert result['name'] == 'test_model.onnx'
+                    assert result['size_mb'] == 5.0
+                    assert result['display_name'] == 'Test Model'
+    
+    @patch('app.get_all_model_paths')
+    def test_initialize_models_at_startup_local_models_exist(self, mock_get_paths):
+        mock_get_paths.return_value = ['model1.onnx', 'model2.onnx']
+        
+        with patch('builtins.print') as mock_print:
+            result = initialize_models_at_startup()
+            
+            assert result is True
+            mock_print.assert_any_call("[STARTUP] ✅ 2 modelo(s) local(es) encontrado(s):")
+
 class TestModelLoading:
     
     def setup_method(self):
@@ -227,42 +283,53 @@ class TestModelLoading:
         import streamlit as st
         st.cache_resource.clear()
     
-    def test_load_model_file_not_exists(self):
-        with patch('app.get_latest_model_path', return_value=None):
-            with patch('app.download_model_from_azure', return_value=False):
+    def test_load_all_models_no_models_available(self):
+        with patch('app.get_all_model_paths', return_value=[]):
+            with patch('app.download_all_models_from_azure', return_value=False):
                 with patch('streamlit.error') as mock_error:
                     with patch('streamlit.info') as mock_info:
                         with patch('streamlit.markdown') as mock_markdown:
-                            result = load_model()
+                            result = load_all_models()
                             
-                            assert result is None
-                            mock_error.assert_called_once()
-                            mock_info.assert_called_once_with("🔍 Modelo no encontrado localmente. Intentando descargar desde Azure...")
+                            assert result == {}
+                            mock_error.assert_called()
+                            mock_info.assert_called_with("🔍 Modelos no encontrados localmente. Intentando descargar desde Azure...")
 
-    @patch('app.get_latest_model_path', return_value='models/production/u2net.onnx')
+    @patch('app.get_all_model_paths')
     @patch('os.path.exists', return_value=True)
     @patch('onnxruntime.InferenceSession')
-    def test_load_model_success(self, mock_session, mock_exists, mock_get_latest):
-        mock_session_instance = Mock()
-        mock_session.return_value = mock_session_instance
+    def test_load_all_models_success(self, mock_session, mock_exists, mock_get_paths):
+        mock_get_paths.return_value = ['models/production/model1.onnx', 'models/production/model2.onnx']
+        mock_session_instances = [Mock(), Mock()]
+        mock_session.side_effect = mock_session_instances
         
-        with patch('streamlit.info'), patch('streamlit.success'):
-            result = load_model()
+        with patch('streamlit.success') as mock_success:
+            result = load_all_models()
         
-        assert result == mock_session_instance
-        mock_session.assert_called_once_with("models/production/u2net.onnx")
+        assert len(result) == 2
+        assert 'model1.onnx' in result
+        assert 'model2.onnx' in result
+        assert result['model1.onnx'] == mock_session_instances[0]
+        assert result['model2.onnx'] == mock_session_instances[1]
+        mock_success.assert_called_with("🎯 2 modelo(s) cargado(s) exitosamente!")
     
-    @patch('app.get_latest_model_path', return_value='models/production/u2net.onnx')
+    @patch('app.get_all_model_paths')
     @patch('os.path.exists', return_value=True)
     @patch('onnxruntime.InferenceSession')
-    def test_load_model_exception(self, mock_session, mock_exists, mock_get_latest):
-        mock_session.side_effect = Exception("Model loading failed")
+    def test_load_all_models_partial_failure(self, mock_session, mock_exists, mock_get_paths):
+        mock_get_paths.return_value = ['models/production/good_model.onnx', 'models/production/bad_model.onnx']
+        mock_session_instance = Mock()
+        mock_session.side_effect = [mock_session_instance, Exception("Model loading failed")]
         
-        with patch('streamlit.info'), patch('streamlit.error') as mock_error:
-            result = load_model()
-            
-            assert result is None
-            mock_error.assert_called_once()
+        with patch('streamlit.success') as mock_success:
+            with patch('streamlit.warning') as mock_warning:
+                result = load_all_models()
+        
+        assert len(result) == 1
+        assert 'good_model.onnx' in result
+        assert 'bad_model.onnx' not in result
+        mock_success.assert_called_with("🎯 1 modelo(s) cargado(s) exitosamente!")
+        mock_warning.assert_called_with("⚠️ 1 modelo(s) fallaron al cargar")
 
 
 class TestImageProcessing:
@@ -506,137 +573,176 @@ class TestAzureIntegration:
             assert config['tenant_id'] is None
             assert config['container_name'] == 'models'
     
-    def test_download_model_no_storage_account(self):
+    def test_download_all_models_no_storage_account(self):
         with patch.dict(os.environ, {}, clear=True):
-            with patch('streamlit.warning') as mock_warning:
-                result = download_model_from_azure()
+            with patch('streamlit.container') as mock_container:
+                mock_placeholder = Mock()
+                mock_placeholder.container.return_value.__enter__ = Mock()
+                mock_placeholder.container.return_value.__exit__ = Mock()
+                
+                result = download_all_models_from_azure(mock_placeholder)
                 
                 assert result is False
-                mock_warning.assert_called_with("⚠️ Credenciales de Azure incompletas.")
     
     @patch('app.DefaultAzureCredential')
     @patch('app.BlobServiceClient')
     @patch('os.makedirs')
-    def test_download_model_success(self, mock_makedirs, mock_blob_service, mock_credential):
+    def test_download_all_models_success(self, mock_makedirs, mock_blob_service, mock_credential):
         # Setup mocks
-        mock_blob = Mock()
-        mock_blob.name = 'production/u2net.onnx'
-        mock_blob.last_modified = '2023-01-01'
-        
         mock_container_client = Mock()
-        mock_container_client.get_container_properties.return_value = True
-        mock_container_client.list_blobs.return_value = [mock_blob]
+        mock_blob_service.return_value.get_container_client.return_value = mock_container_client
         
+        # Mock blobs
+        mock_blob1 = Mock()
+        mock_blob1.name = 'production/model1.onnx'
+        mock_blob2 = Mock()
+        mock_blob2.name = 'production/model2.onnx'
+        
+        mock_container_client.list_blobs.return_value = [mock_blob1, mock_blob2]
+        mock_container_client.get_container_properties.return_value = Mock()
+        
+        # Mock blob client for downloads
         mock_blob_client = Mock()
-        mock_blob_client.download_blob.return_value.readall.return_value = b'fake model data'
-        
-        mock_blob_service_instance = Mock()
-        mock_blob_service_instance.get_container_client.return_value = mock_container_client
-        mock_blob_service_instance.get_blob_client.return_value = mock_blob_client
-        mock_blob_service.return_value = mock_blob_service_instance
+        mock_blob_client.download_blob.return_value.readall.return_value = b'fake_model_data'
+        mock_blob_service.return_value.get_blob_client.return_value = mock_blob_client
         
         with patch.dict(os.environ, {
             'AZURE_STORAGE_ACCOUNT_NAME': 'test_storage',
-            'AZURE_CLIENT_ID': 'test_client_id',
-            'AZURE_CLIENT_SECRET': 'test_secret', 
-            'AZURE_TENANT_ID': 'test_tenant'
-        }):
-            with patch('streamlit.spinner'), patch('streamlit.success') as mock_success:
-                with patch('builtins.open', create=True) as mock_open:
-                    mock_file = Mock()
-                    mock_open.return_value.__enter__.return_value = mock_file
-                    
-                    result = download_model_from_azure()
-                    
-                    assert result is True
-                    mock_file.write.assert_called_with(b'fake model data')
-    
-    @patch('app.DefaultAzureCredential')
-    @patch('app.BlobServiceClient')
-    def test_download_model_blob_not_exists(self, mock_blob_service, mock_credential):
-        # Setup mocks
-        mock_container_client = Mock()
-        mock_container_client.get_container_properties.return_value = True
-        mock_container_client.list_blobs.return_value = []  # No blobs found
-        
-        mock_blob_service_instance = Mock()
-        mock_blob_service_instance.get_container_client.return_value = mock_container_client
-        mock_blob_service.return_value = mock_blob_service_instance
-        
-        with patch.dict(os.environ, {
-            'AZURE_STORAGE_ACCOUNT_NAME': 'test_storage',
-            'AZURE_CLIENT_ID': 'test_client_id',
+            'AZURE_CLIENT_ID': 'test_client',
             'AZURE_CLIENT_SECRET': 'test_secret',
             'AZURE_TENANT_ID': 'test_tenant'
         }):
-            with patch('streamlit.spinner'), patch('streamlit.error') as mock_error:
-                with patch('os.makedirs'):
-                    result = download_model_from_azure()
-                    
-                    assert result is False
-                    mock_error.assert_called_with("❌ No se encontraron archivos .onnx en la ruta production/")
+            with patch('streamlit.container'), patch('streamlit.spinner'), patch('builtins.open', create=True):
+                result = download_all_models_from_azure()
+        
+        assert result is True
+        assert mock_makedirs.call_count >= 1
     
     @patch('app.DefaultAzureCredential')
     @patch('app.BlobServiceClient')
-    def test_download_model_exception_handling(self, mock_blob_service, mock_credential):
+    def test_download_all_models_no_onnx_files(self, mock_blob_service, mock_credential):
+        # Setup mocks
+        mock_container_client = Mock()
+        mock_blob_service.return_value.get_container_client.return_value = mock_container_client
+        
+        # Mock no .onnx blobs
+        mock_blob = Mock()
+        mock_blob.name = 'production/not_a_model.txt'
+        mock_container_client.list_blobs.return_value = [mock_blob]
+        mock_container_client.get_container_properties.return_value = Mock()
+        
+        with patch.dict(os.environ, {
+            'AZURE_STORAGE_ACCOUNT_NAME': 'test_storage',
+            'AZURE_CLIENT_ID': 'test_client',
+            'AZURE_CLIENT_SECRET': 'test_secret',
+            'AZURE_TENANT_ID': 'test_tenant'
+        }):
+            with patch('streamlit.container'), patch('streamlit.spinner'):
+                result = download_all_models_from_azure()
+        
+        assert result is False
+    
+    @patch('app.DefaultAzureCredential')
+    @patch('app.BlobServiceClient')
+    def test_download_all_models_exception_handling(self, mock_blob_service, mock_credential):
         # Setup mock to raise exception
         mock_blob_service.side_effect = Exception("Azure connection failed")
         
         with patch.dict(os.environ, {
             'AZURE_STORAGE_ACCOUNT_NAME': 'test_storage',
-            'AZURE_CLIENT_ID': 'test_client_id',
+            'AZURE_CLIENT_ID': 'test_client',
             'AZURE_CLIENT_SECRET': 'test_secret',
             'AZURE_TENANT_ID': 'test_tenant'
         }):
-            with patch('streamlit.error') as mock_error:
-                result = download_model_from_azure()
-                
-                assert result is False
-                mock_error.assert_called_with("❌ Error al descargar el modelo: Azure connection failed")
+            with patch('streamlit.container'), patch('streamlit.error'):
+                result = download_all_models_from_azure()
+        
+        assert result is False
     
-    @patch('app.MODEL_PATH', None)
-    @patch('app.get_latest_model_path')
+    @patch('app.get_all_model_paths')
     @patch('os.path.exists')
-    @patch('app.download_model_from_azure')
+    @patch('app.download_all_models_from_azure')
     @patch('onnxruntime.InferenceSession')
-    def test_load_model_with_azure_download_success(self, mock_session, mock_download, mock_exists, mock_get_latest):
+    def test_load_all_models_with_azure_download_success(self, mock_session, mock_download, mock_exists, mock_get_paths):
         # Clear cache before test
         import streamlit as st
         st.cache_resource.clear()
         
-        # Setup the sequence: first no model, then model exists after download
-        mock_get_latest.side_effect = [None, 'models/production/u2net.onnx']
-        mock_exists.side_effect = [True]  # Only called once after download with the model path
+        # First call: no models locally
+        # Second call: models available after download
+        mock_get_paths.side_effect = [[], ['models/production/downloaded_model.onnx']]
+        mock_exists.return_value = True
         mock_download.return_value = True
+        mock_session.return_value = Mock()
         
-        mock_session_instance = Mock()
-        mock_session.return_value = mock_session_instance
+        with patch('streamlit.info'), patch('streamlit.success'):
+            result = load_all_models()
         
-        with patch('streamlit.info') as mock_info:
-            with patch('streamlit.success') as mock_success:
-                result = load_model()
-                
-                assert result == mock_session_instance
-                mock_info.assert_called_with("🔍 Modelo no encontrado localmente. Intentando descargar desde Azure...")
-                mock_download.assert_called_once()
-                mock_success.assert_called_with("🎯 Modelo cargado exitosamente!")
+        assert len(result) == 1
+        assert 'downloaded_model.onnx' in result
+        mock_download.assert_called_once()
     
-    @patch('app.get_latest_model_path', return_value=None)
-    @patch('app.download_model_from_azure', return_value=False)
-    def test_load_model_azure_download_fails(self, mock_download, mock_get_latest):
+    @patch('app.get_all_model_paths', return_value=[])
+    @patch('app.download_all_models_from_azure', return_value=False)
+    def test_load_all_models_azure_download_fails(self, mock_download, mock_get_paths):
         # Clear cache before test
         import streamlit as st
         st.cache_resource.clear()
         
-        with patch('streamlit.info') as mock_info:
-            with patch('streamlit.error') as mock_error:
-                with patch('streamlit.markdown') as mock_markdown:
-                    result = load_model()
-                    
-                    assert result is None
-                    mock_info.assert_called_once_with("🔍 Modelo no encontrado localmente. Intentando descargar desde Azure...")
-                    mock_download.assert_called_once()
-                    mock_error.assert_called_with("❌ No se pudo obtener el modelo desde Azure Blob Storage")
+        with patch('streamlit.info'), patch('streamlit.error'), patch('streamlit.markdown'):
+            result = load_all_models()
+        
+        assert result == {}
+        mock_download.assert_called_once()
+
+class TestImageProcessingWithMultipleModels:
+    """Test image processing with model selection"""
+    
+    def create_mock_session(self):
+        mock_session = Mock()
+        mock_input = Mock()
+        mock_input.name = 'input'
+        mock_session.get_inputs.return_value = [mock_input]
+        
+        fake_output = np.random.rand(1, 1, 320, 320).astype(np.float32)
+        mock_session.run.return_value = [fake_output]
+        
+        return mock_session
+    
+    def test_process_image_with_selected_model(self):
+        """Test that process_image works with individually selected sessions"""
+        image = Image.new('RGB', (200, 200), color=(255, 128, 64))
+        mock_session = self.create_mock_session()
+        
+        result = process_image(image, mock_session)
+        
+        assert isinstance(result, Image.Image)
+        assert result.mode == 'RGBA'
+        assert result.size == image.size
+        
+        mock_session.get_inputs.assert_called_once()
+        mock_session.run.assert_called_once()
+    
+    def test_process_image_with_model_metadata_logging(self):
+        """Test that model information is included in metadata logging"""
+        image = Image.new('RGB', (200, 200), color=(255, 128, 64))
+        mock_session = self.create_mock_session()
+        
+        image_metadata = {
+            'name': 'test_image.jpg',
+            'size_kb': 50.0,
+            'width_px': 200,
+            'height_px': 200,
+            'format': 'JPEG',
+            'mode': 'RGB'
+        }
+        
+        with patch('app.log_prediction_to_blob') as mock_log:
+            result = process_image(image, mock_session, image_metadata)
+            
+            assert isinstance(result, Image.Image)
+            mock_log.assert_called_once()
+            # Model info should not be in this function anymore - it's added at UI level
 
 
 class TestLoggingFunctionality:

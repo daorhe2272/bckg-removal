@@ -16,19 +16,21 @@ from azure.identity import DefaultAzureCredential
 
 load_dotenv()
 
-def initialize_model_at_startup():
+def initialize_models_at_startup():
     """
-    Inicializa el modelo al arranque del contenedor, antes de que se muestre la UI.
-    Esto asegura que el modelo esté listo desde el primer uso.
+    Inicializa todos los modelos disponibles al arranque del contenedor, antes de que se muestre la UI.
+    Esto asegura que todos los modelos estén listos desde el primer uso.
     """
-    print(f"[STARTUP] Verificando disponibilidad del modelo...")
+    print(f"[STARTUP] Verificando disponibilidad de modelos...")
     
-    model_path = get_latest_model_path()
-    if model_path and os.path.exists(model_path):
-        print(f"[STARTUP] ✅ Modelo local encontrado: {os.path.basename(model_path)}")
+    model_paths = get_all_model_paths()
+    if model_paths:
+        print(f"[STARTUP] ✅ {len(model_paths)} modelo(s) local(es) encontrado(s):")
+        for path in model_paths:
+            print(f"[STARTUP]   - {os.path.basename(path)}")
         return True
     
-    print(f"[STARTUP] 📥 Modelo no encontrado localmente, descargando desde Azure...")
+    print(f"[STARTUP] 📥 Modelos no encontrados localmente, descargando desde Azure...")
     
     # Intentar descarga sin UI de Streamlit
     try:
@@ -43,7 +45,7 @@ def initialize_model_at_startup():
         ]
         
         if not all(required_credentials):
-            print(f"[STARTUP] ⚠️ Credenciales de Azure incompletas, modelo se descargará en primer uso")
+            print(f"[STARTUP] ⚠️ Credenciales de Azure incompletas, modelos se descargarán en primer uso")
             return False
         
         # Conectar a Azure Blob Storage
@@ -62,27 +64,29 @@ def initialize_model_at_startup():
             print(f"[STARTUP] ❌ No se encontraron modelos en Azure, se intentará descargar en primer uso")
             return False
         
-        # Descargar modelo más reciente
-        latest_blob = max(onnx_blobs, key=lambda x: x.last_modified)
-        blob_name = latest_blob.name
-        
-        print(f"[STARTUP] 📥 Descargando: {os.path.basename(blob_name)}")
+        # Descargar todos los modelos disponibles
+        print(f"[STARTUP] 📥 Descargando {len(onnx_blobs)} modelo(s)...")
         
         # Crear directorio y descargar
         os.makedirs("models/production", exist_ok=True)
-        download_path = os.path.join("models/production", os.path.basename(blob_name))
         
-        blob_client = blob_service_client.get_blob_client(container=config['container_name'], blob=blob_name)
+        for blob in onnx_blobs:
+            blob_name = blob.name
+            download_path = os.path.join("models/production", os.path.basename(blob_name))
+            
+            print(f"[STARTUP] 📥 Descargando: {os.path.basename(blob_name)}")
+            
+            blob_client = blob_service_client.get_blob_client(container=config['container_name'], blob=blob_name)
+            
+            with open(download_path, "wb") as download_file:
+                download_file.write(blob_client.download_blob().readall())
         
-        with open(download_path, "wb") as download_file:
-            download_file.write(blob_client.download_blob().readall())
-        
-        print(f"[STARTUP] ✅ Modelo descargado exitosamente: {os.path.basename(download_path)}")
+        print(f"[STARTUP] ✅ {len(onnx_blobs)} modelo(s) descargado(s) exitosamente")
         return True
         
     except Exception as e:
-        print(f"[STARTUP] ❌ Error al descargar modelo: {str(e)}")
-        print(f"[STARTUP] ⚠️ El modelo se descargará en el primer uso")
+        print(f"[STARTUP] ❌ Error al descargar modelos: {str(e)}")
+        print(f"[STARTUP] ⚠️ Los modelos se descargarán en el primer uso")
         return False
 
 st.set_page_config(
@@ -107,7 +111,44 @@ def get_latest_model_path():
     latest_file = max(onnx_files, key=os.path.getmtime)
     return latest_file
 
-MODEL_PATH = get_latest_model_path()
+def get_all_model_paths():
+    """
+    Busca todos los archivos .onnx disponibles en el directorio local de producción.
+    
+    Retorna:
+        list: Lista de rutas de todos los modelos disponibles, ordenados por fecha de modificación (más reciente primero)
+    """
+    production_dir = "models/production/"
+    onnx_files = glob.glob(os.path.join(production_dir, "*.onnx"))
+    
+    if not onnx_files:
+        return []
+    
+    # Ordenar por fecha de modificación (más reciente primero)
+    onnx_files.sort(key=os.path.getmtime, reverse=True)
+    return onnx_files
+
+def get_model_info(model_path):
+    """
+    Obtiene información detallada de un modelo específico.
+    
+    Args:
+        model_path (str): Ruta del modelo
+        
+    Retorna:
+        dict: Diccionario con información del modelo
+    """
+    if not os.path.exists(model_path):
+        return None
+    
+    stats = os.stat(model_path)
+    return {
+        'name': os.path.basename(model_path),
+        'path': model_path,
+        'size_mb': round(stats.st_size / (1024 * 1024), 2),
+        'modified_time': datetime.fromtimestamp(stats.st_mtime),
+        'display_name': os.path.basename(model_path).replace('.onnx', '').replace('_', ' ').title()
+    }
 
 def get_azure_config():
     """
@@ -201,9 +242,9 @@ def log_prediction_to_blob(image_metadata, processing_time, success, error_messa
         with st.expander("🔍 Ver detalles del error de logging"):
             st.code(f"Error: {str(e)}\nMetadatos de la imagen: {json.dumps(image_metadata, indent=2)}")
 
-def download_model_from_azure(status_placeholder=None):
+def download_all_models_from_azure(status_placeholder=None):
     """
-    Descarga el modelo más reciente desde Azure Blob Storage.
+    Descarga todos los modelos disponibles desde Azure Blob Storage.
     
     Args:
         status_placeholder: Placeholder de Streamlit para mostrar el estado de la descarga
@@ -274,8 +315,8 @@ def download_model_from_azure(status_placeholder=None):
             with status_placeholder.container():
                 if onnx_blobs:
                     st.info(f"📁 Encontrado {len(onnx_blobs)} modelo(s) en production/")
-                    latest_name = max(onnx_blobs, key=lambda x: x.last_modified).name
-                    st.text(f"  ✓ Más reciente: {latest_name}")
+                    for blob in onnx_blobs:
+                        st.text(f"  ✓ {blob.name}")
                 else:
                     st.info(f"📊 Buscando en {len(all_blobs)} archivos del contenedor...")
             
@@ -284,83 +325,121 @@ def download_model_from_azure(status_placeholder=None):
                     st.error("❌ No se encontraron archivos .onnx en la ruta production/")
                     st.info("💡 Verifica que los archivos .onnx estén subidos en la ruta correcta")
                 return False
-            
-            # Seleccionar el modelo más reciente basado en la fecha de modificación
-            latest_blob = max(onnx_blobs, key=lambda x: x.last_modified)
-            blob_name = latest_blob.name
-            
-            with status_placeholder.container():
-                st.info(f"📥 Descargando: {os.path.basename(blob_name)}")
         
         # Crear directorio local si no existe
         os.makedirs("models/production", exist_ok=True)
-        download_path = os.path.join("models/production", os.path.basename(blob_name))
         
-        with st.spinner("📥 Descargando modelo..."):
-            blob_client = blob_service_client.get_blob_client(container=config['container_name'], blob=blob_name)
-            
-            # Descargar y guardar el archivo
-            with open(download_path, "wb") as download_file:
-                download_file.write(blob_client.download_blob().readall())
+        # Descargar todos los modelos
+        downloaded_count = 0
+        for blob in onnx_blobs:
+            blob_name = blob.name
+            download_path = os.path.join("models/production", os.path.basename(blob_name))
             
             with status_placeholder.container():
-                st.success(f"✅ Modelo descargado: {os.path.basename(blob_name)}")
-            return True
+                st.info(f"📥 Descargando: {os.path.basename(blob_name)}")
+            
+            with st.spinner(f"📥 Descargando {os.path.basename(blob_name)}..."):
+                blob_client = blob_service_client.get_blob_client(container=config['container_name'], blob=blob_name)
+                
+                # Descargar y guardar el archivo
+                with open(download_path, "wb") as download_file:
+                    download_file.write(blob_client.download_blob().readall())
+                
+                downloaded_count += 1
+        
+        with status_placeholder.container():
+            st.success(f"✅ {downloaded_count} modelo(s) descargado(s) exitosamente")
+        return True
             
     except Exception as e:
         with status_placeholder.container():
-            st.error(f"❌ Error al descargar el modelo: {str(e)}")
+            st.error(f"❌ Error al descargar los modelos: {str(e)}")
             with st.expander("🔍 Ver detalles del error"):
                 import traceback
                 st.code(traceback.format_exc())
         return False
 
 @st.cache_resource
-def load_model():
+def load_all_models():
     """
-    Carga el modelo ONNX para inferencia. Usa caché de Streamlit para optimizar rendimiento.
-    El modelo debería estar disponible localmente gracias a la inicialización al arranque.
+    Carga todos los modelos ONNX disponibles para inferencia. Usa caché de Streamlit para optimizar rendimiento.
+    Los modelos deberían estar disponibles localmente gracias a la inicialización al arranque.
     
     Retorna:
-        onnxruntime.InferenceSession: Sesión de inferencia del modelo, o None si falla
+        dict: Diccionario con sesiones de inferencia de todos los modelos disponibles, o dict vacío si falla
     """
-    model_path = get_latest_model_path()
+    model_paths = get_all_model_paths()
     
-    # Si el modelo está disponible localmente
-    if model_path and os.path.exists(model_path):
-        try:
-            session = ort.InferenceSession(model_path)
-            return session
-        except Exception as e:
-            st.error(f"❌ Error al cargar el modelo local: {str(e)}")
-            return None
+    # Si hay modelos disponibles localmente
+    if model_paths:
+        sessions = {}
+        loaded_models = []
+        failed_models = []
+        
+        for model_path in model_paths:
+            try:
+                session = ort.InferenceSession(model_path)
+                model_name = os.path.basename(model_path)
+                sessions[model_name] = session
+                loaded_models.append(model_name)
+            except Exception as e:
+                failed_models.append(f"{os.path.basename(model_path)}: {str(e)}")
+        
+        if loaded_models:
+            st.success(f"🎯 {len(loaded_models)} modelo(s) cargado(s) exitosamente!")
+            if failed_models:
+                st.warning(f"⚠️ {len(failed_models)} modelo(s) fallaron al cargar")
+                with st.expander("Ver errores de carga"):
+                    for error in failed_models:
+                        st.code(error)
+            return sessions
+        else:
+            st.error("❌ No se pudo cargar ningún modelo local")
+            if failed_models:
+                with st.expander("Ver errores de carga"):
+                    for error in failed_models:
+                        st.code(error)
     
-    # Respaldo: si no hay modelo local, intentar descarga con UI
-    st.info("🔍 Modelo no encontrado localmente. Intentando descargar desde Azure...")
+    # Respaldo: si no hay modelos locales, intentar descarga con UI
+    st.info("🔍 Modelos no encontrados localmente. Intentando descargar desde Azure...")
     
-    if not download_model_from_azure():
-        st.error("❌ No se pudo obtener el modelo desde Azure Blob Storage")
+    if not download_all_models_from_azure():
+        st.error("❌ No se pudo obtener los modelos desde Azure Blob Storage")
         st.markdown("""
         **📋 Verifica la configuración:**
         - Las variables de entorno de Azure estén configuradas correctamente
         - El Service Principal tenga permisos de lectura en el Blob Storage  
-        - El modelo existe en la ruta especificada en Azure
+        - Los modelos existen en la ruta especificada en Azure
         """)
-        return None
+        return {}
     
     # Intentar cargar después de la descarga
-    model_path = get_latest_model_path()
-    if model_path and os.path.exists(model_path):
-        try:
-            session = ort.InferenceSession(model_path)
-            st.success("🎯 Modelo cargado exitosamente!")
-            return session
-        except Exception as e:
-            st.error(f"❌ Error al cargar el modelo: {str(e)}")
-            return None
+    model_paths = get_all_model_paths()
+    if model_paths:
+        sessions = {}
+        loaded_models = []
+        failed_models = []
+        
+        for model_path in model_paths:
+            try:
+                session = ort.InferenceSession(model_path)
+                model_name = os.path.basename(model_path)
+                sessions[model_name] = session
+                loaded_models.append(model_name)
+            except Exception as e:
+                failed_models.append(f"{os.path.basename(model_path)}: {str(e)}")
+        
+        if loaded_models:
+            st.success(f"🎯 {len(loaded_models)} modelo(s) cargado(s) después de la descarga!")
+            if failed_models:
+                st.warning(f"⚠️ {len(failed_models)} modelo(s) fallaron al cargar")
+            return sessions
+        else:
+            st.error("❌ No se pudo cargar ningún modelo después de la descarga")
+            return {}
     
-    st.error("❌ No se encontró el modelo después de la descarga")
-    return None
+    st.error("❌ No se encontraron modelos después de la descarga")
+    return {}
 
 def preprocess_image(image: Image.Image) -> np.ndarray:
     """
@@ -539,7 +618,7 @@ def image_to_bytes(image: Image.Image) -> bytes:
     return img_byte_arr.getvalue()
 
 st.title("🖼️ Herramienta de Eliminación de Fondo")
-st.markdown("Sube una imagen para eliminar su fondo automáticamente usando IA")
+st.markdown("Sube una imagen para eliminar su fondo automáticamente usando IA. Selecciona entre múltiples modelos disponibles para obtener los mejores resultados.")
 
 with st.sidebar:
     st.header("⚙️ Configuración")
@@ -559,7 +638,7 @@ with st.sidebar:
             st.code(f"""
 Storage Account: {config['storage_account_name']}
 Container: {config['container_name']}
-Model Search Path: production/*.onnx (latest)
+Model Search Path: production/*.onnx (todos)
 Client ID: {config['client_id'][:6]}***
 Tenant ID: {config['tenant_id'][:6]}***
             """)
@@ -573,25 +652,80 @@ AZURE_CLIENT_SECRET
 AZURE_TENANT_ID
         """)
 
-initialize_model_at_startup()
+initialize_models_at_startup()
 
-session = load_model()
+session = load_all_models()
 
-if session is None:
+if not session:
     st.stop()
 
 with st.sidebar:
     st.markdown("---")
-    st.subheader("📊 Estado del Modelo")
+    st.subheader("🤖 Selección de Modelo")
     
-    model_path = get_latest_model_path()
-    if model_path and os.path.exists(model_path):
-        st.success("✅ Modelo listo")
-        model_size = os.path.getsize(model_path) / (1024 * 1024)
-        st.caption(f"📁 {os.path.basename(model_path)}")
-        st.caption(f"💾 {model_size:.1f} MB")
+    model_paths = get_all_model_paths()
+    if model_paths and session:
+        # Crear opciones para el selector de modelos
+        model_options = {}
+        for model_path in model_paths:
+            model_info = get_model_info(model_path)
+            if model_info and model_info['name'] in session:
+                model_options[model_info['display_name']] = model_info['name']
+        
+        if len(model_options) > 1:
+            # Si hay múltiples modelos, mostrar selector
+            selected_model_display = st.selectbox(
+                "Elige el modelo a usar:",
+                options=list(model_options.keys()),
+                index=0,
+                help="Selecciona el modelo que mejor se adapte a tus necesidades. Puedes cambiar entre modelos sin reiniciar la aplicación."
+            )
+            selected_model_name = model_options[selected_model_display]
+            st.session_state.selected_model = selected_model_name
+            
+            # Mostrar información del modelo seleccionado
+            selected_model_path = None
+            for path in model_paths:
+                if os.path.basename(path) == selected_model_name:
+                    selected_model_path = path
+                    break
+            
+            if selected_model_path:
+                model_info = get_model_info(selected_model_path)
+                if model_info:
+                    st.info(f"📁 **{model_info['display_name']}**")
+                    st.caption(f"💾 Tamaño: {model_info['size_mb']} MB")
+                    st.caption(f"📅 Modificado: {model_info['modified_time'].strftime('%Y-%m-%d %H:%M')}")
+        else:
+            # Si solo hay un modelo, mostrarlo automáticamente
+            single_model_name = list(model_options.values())[0]
+            st.session_state.selected_model = single_model_name
+            st.info(f"📁 **Modelo único disponible**")
+            
+            single_model_path = None
+            for path in model_paths:
+                if os.path.basename(path) == single_model_name:
+                    single_model_path = path
+                    break
+            
+            if single_model_path:
+                model_info = get_model_info(single_model_path)
+                if model_info:
+                    st.caption(f"� Tamaño: {model_info['size_mb']} MB")
+                    st.caption(f"📅 Modificado: {model_info['modified_time'].strftime('%Y-%m-%d %H:%M')}")
+        
+        # Mostrar resumen de todos los modelos disponibles
+        with st.expander("Ver todos los modelos"):
+            st.subheader("📊 Estado de los Modelos")
+            for model_path in model_paths:
+                model_info = get_model_info(model_path)
+                if model_info:
+                    status = "✅ Cargado" if model_info['name'] in session else "❌ Error"
+                    st.text(f"{status} {model_info['display_name']} ({model_info['size_mb']} MB)")
     else:
-        st.warning("⚠️ Modelo no disponible")
+        st.warning("⚠️ Modelos no disponibles")
+        if 'selected_model' in st.session_state:
+            del st.session_state.selected_model
     
     st.markdown("---")
     st.subheader("⚡ Optimización")
@@ -651,22 +785,46 @@ with col2:
         }
         
         if st.button("🚀 Eliminar Fondo", type="primary", use_container_width=True):
+            # Verificar que hay un modelo seleccionado
+            if 'selected_model' not in st.session_state:
+                st.error("❌ No hay ningún modelo seleccionado. Verifica que los modelos estén cargados correctamente.")
+                st.stop()
+            
+            selected_model_name = st.session_state.selected_model
+            if selected_model_name not in session:
+                st.error(f"❌ El modelo seleccionado '{selected_model_name}' no está disponible.")
+                st.stop()
+            
+            selected_session = session[selected_model_name]
+            
             # Verificar si la imagen será optimizada
             _, will_be_resized = optimize_image_size(original_image, max_dimension=2000)
             
             if will_be_resized:
                 st.info("⚡ Imagen grande detectada. Se optimizará automáticamente para mejor rendimiento.")
             
+            # Mostrar información del modelo que se está usando
+            st.info(f"🤖 Procesando con modelo: **{selected_model_name.replace('.onnx', '').replace('_', ' ').title()}**")
+            
             with st.spinner("Procesando imagen con IA..."):
-                processed_image = process_image(original_image, session, image_metadata)
+                # Actualizar metadatos con información del modelo
+                image_metadata['model_used'] = selected_model_name
+                
+                processed_image = process_image(original_image, selected_session, image_metadata)
                 
                 if processed_image:
                     st.session_state.processed_image = processed_image
                     st.session_state.original_filename = uploaded_file.name
                     st.session_state.was_optimized = will_be_resized
+                    st.session_state.model_used = selected_model_name
         
         if "processed_image" in st.session_state:
             st.image(st.session_state.processed_image, use_column_width=True)
+            
+            # Mostrar información del modelo usado
+            if st.session_state.get("model_used"):
+                model_display_name = st.session_state.model_used.replace('.onnx', '').replace('_', ' ').title()
+                st.success(f"🤖 Procesado con: **{model_display_name}**")
             
             # Mostrar información sobre la optimización si aplica
             if st.session_state.get("was_optimized", False):
@@ -694,7 +852,8 @@ with col2:
 
 st.markdown("---")
 st.markdown(
-    "**Cómo funciona:** Esta herramienta utiliza una red neuronal U2-Net para detectar y eliminar automáticamente los fondos de las imágenes. "
+    "**Cómo funciona:** Esta herramienta utiliza redes neuronales U2-Net para detectar y eliminar automáticamente los fondos de las imágenes. "
+    "Puedes elegir entre múltiples modelos disponibles, cada uno optimizado para diferentes tipos de imágenes. "
     "Las imágenes grandes (>2000px) se optimizan automáticamente para mayor velocidad manteniendo la calidad. "
     "La imagen procesada tendrá un fondo transparente que podrás usar en tus proyectos."
 )
