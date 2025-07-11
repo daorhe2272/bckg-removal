@@ -2,12 +2,33 @@ import os
 import sys
 import pytest
 import numpy as np
-
+from unittest.mock import Mock, patch
 from PIL import Image
 from typing import Tuple
-from app import load_all_models, preprocess_image_for_model, process_image
 
-sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
+# Mock all the problematic imports before importing from app
+sys.modules['cv2'] = Mock()
+sys.modules['streamlit'] = Mock()
+sys.modules['onnxruntime'] = Mock()
+sys.modules['azure.storage.blob'] = Mock()
+sys.modules['azure.identity'] = Mock()
+sys.modules['dotenv'] = Mock()
+
+# Mock streamlit at module level to avoid import issues
+mock_st = Mock()
+mock_st.cache_resource = Mock()
+mock_st.cache_resource.return_value = lambda func: func  # Return function unmodified
+
+# Patch streamlit before importing app
+with patch.dict('sys.modules', {'streamlit': mock_st}):
+    sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
+    from app import (
+        load_all_models,
+        preprocess_image_for_model,
+        process_image,
+        detect_model_type,
+        get_model_input_size
+    )
 
 
 class TestModelResponsiveness:

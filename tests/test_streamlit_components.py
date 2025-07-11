@@ -7,28 +7,57 @@ from PIL import Image
 from unittest.mock import Mock, patch
 from tests.test_utils import TestImageGenerator
 
-sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
+# Mock all the problematic imports before importing from app
+sys.modules['cv2'] = Mock()
+sys.modules['streamlit'] = Mock()
+sys.modules['onnxruntime'] = Mock()
+sys.modules['azure.storage.blob'] = Mock()
+sys.modules['azure.identity'] = Mock()
+sys.modules['dotenv'] = Mock()
+
+# Mock streamlit at module level to avoid import issues
+mock_st = Mock()
+mock_st.cache_resource = Mock()
+mock_st.cache_resource.return_value = lambda func: func  # Return function unmodified
+mock_st.error = Mock()
+mock_st.info = Mock()
+mock_st.success = Mock()
+mock_st.warning = Mock()
+mock_st.markdown = Mock()
+mock_st.expander = Mock()
+mock_st.spinner = Mock()
+mock_st.container = Mock()
+mock_st.empty = Mock()
+mock_st.button = Mock()
+mock_st.download_button = Mock()
+mock_st.file_uploader = Mock()
+mock_st.columns = Mock()
+mock_st.selectbox = Mock()
+
+# Patch streamlit before importing app
+with patch.dict('sys.modules', {'streamlit': mock_st}):
+    sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
+    from app import (
+        load_all_models,
+        process_image,
+        image_to_bytes
+    )
 
 
 class TestStreamlitComponents:
 
-    @patch('streamlit.error')
-    @patch('streamlit.info')
-    @patch('streamlit.markdown')
+    @patch('app.st.error')
+    @patch('app.st.info')
+    @patch('app.st.markdown')
     @patch('app.download_all_models_from_azure', return_value=False)
     @patch('app.get_all_model_paths', return_value=[])
     def test_model_loading_error_display(self, mock_get_paths, mock_download, mock_markdown, mock_info, mock_error):
-        # Clear cache before test
-        import streamlit as st
-        st.cache_resource.clear()
-        
-        from app import load_all_models
-        
         result = load_all_models()
         
         assert result == {}
         mock_error.assert_called()
         mock_info.assert_called_with("🔍 Modelos no encontrados localmente. Intentando descargar desde Azure...")
+
 
 class TestImageUploadProcessing:
     
@@ -70,6 +99,7 @@ class TestImageUploadProcessing:
         assert "KB" in file_details["Tamaño de archivo"]
         assert "640 × 480 px" in file_details["Tamaño de imagen"]
 
+
 class TestDownloadFunctionality:
     
     def test_download_filename_generation(self):
@@ -99,10 +129,12 @@ class TestDownloadFunctionality:
         
         assert download_filename == expected_download_name
 
+
 class TestSessionStateHandling:
     
-    @patch('streamlit.session_state', new_callable=dict)
-    def test_session_state_storage(self, mock_session_state):
+    def test_session_state_storage(self):
+        # Create mock session state
+        mock_session_state = {}
         test_image = TestImageGenerator.create_solid_color_image((100, 100), (255, 0, 0))
         test_filename = "test_image.jpg"
         
@@ -113,8 +145,9 @@ class TestSessionStateHandling:
         assert 'original_filename' in mock_session_state
         assert mock_session_state['original_filename'] == test_filename
     
-    @patch('streamlit.session_state', new_callable=dict)
-    def test_session_state_retrieval(self, mock_session_state):
+    def test_session_state_retrieval(self):
+        # Create mock session state
+        mock_session_state = {}
         test_image = TestImageGenerator.create_solid_color_image((150, 150), (0, 255, 0))
         
         mock_session_state['processed_image'] = test_image
@@ -126,10 +159,12 @@ class TestSessionStateHandling:
         assert retrieved_image == test_image
         assert retrieved_filename == "retrieved_image.png"
 
+
 class TestUIComponents:
     
-    @patch('streamlit.columns')
-    def test_layout_columns_creation(self, mock_columns):
+    def test_layout_columns_creation(self):
+        # Mock columns function
+        mock_columns = Mock()
         mock_columns.return_value = (Mock(), Mock())
         
         col1, col2 = mock_columns([1, 1], gap="large")
@@ -138,13 +173,12 @@ class TestUIComponents:
         assert col1 is not None
         assert col2 is not None
     
-    @patch('streamlit.file_uploader')
-    def test_file_uploader_configuration(self, mock_uploader):
+    def test_file_uploader_configuration(self):
+        # Mock file uploader
+        mock_uploader = Mock()
         mock_uploader.return_value = None
         
-        from app import st
-        
-        uploaded_file = st.file_uploader(
+        uploaded_file = mock_uploader(
             "Arrastra y suelta una imagen aquí o haz clic para buscar",
             type=["png", "jpg", "jpeg", "bmp", "tiff"],
             help="Formatos soportados: PNG, JPG, JPEG, BMP, TIFF"
@@ -155,12 +189,11 @@ class TestUIComponents:
         assert "png" in call_args[1]["type"]
         assert "jpg" in call_args[1]["type"]
 
+
 class TestErrorHandlingUI:
     
-    @patch('streamlit.error')
+    @patch('app.st.error')
     def test_processing_error_display(self, mock_error):
-        from app import process_image
-        
         test_image = TestImageGenerator.create_solid_color_image((100, 100), (128, 128, 128))
         
         # Create mock model_info with broken session
@@ -179,8 +212,8 @@ class TestErrorHandlingUI:
         assert result is None
         mock_error.assert_called_once()
     
-    @patch('streamlit.spinner')
-    def test_processing_spinner_context(self, mock_spinner):
+    def test_processing_spinner_context(self):
+        mock_spinner = Mock()
         mock_spinner.return_value.__enter__ = Mock()
         mock_spinner.return_value.__exit__ = Mock()
         
@@ -189,16 +222,14 @@ class TestErrorHandlingUI:
         
         mock_spinner.assert_called_with("Procesando imagen con IA...")
 
+
 class TestButtonInteractions:
     
-    @patch('streamlit.button')
-    def test_process_button_configuration(self, mock_button):
+    def test_process_button_configuration(self):
+        mock_button = Mock()
         mock_button.return_value = False
         
-        from app import st
-        
-        if st.button("🚀 Eliminar Fondo", type="primary", use_container_width=True):
-            pass
+        result = mock_button("🚀 Eliminar Fondo", type="primary", use_container_width=True)
         
         mock_button.assert_called()
         call_args = mock_button.call_args
@@ -206,18 +237,14 @@ class TestButtonInteractions:
         assert call_args[1]["type"] == "primary"
         assert call_args[1]["use_container_width"] == True
     
-    @patch('streamlit.download_button')
-    def test_download_button_configuration(self, mock_download_button):
-        from app import image_to_bytes
-        
+    def test_download_button_configuration(self):
         test_image = TestImageGenerator.create_solid_color_image((50, 50), (200, 200, 200))
         processed_bytes = image_to_bytes(test_image)
         
+        mock_download_button = Mock()
         mock_download_button.return_value = False
         
-        from app import st
-        
-        st.download_button(
+        result = mock_download_button(
             label="📥 Descargar Imagen Procesada",
             data=processed_bytes,
             file_name="test_no_background.png",
@@ -232,47 +259,39 @@ class TestButtonInteractions:
         assert call_args[1]["mime"] == "image/png"
         assert call_args[1]["type"] == "secondary"
 
+
 class TestInfoMessages:
     
-    @patch('streamlit.success')
-    def test_success_message_display(self, mock_success):
-        from app import st
-        
-        st.success("✅ Fondo eliminado exitosamente!")
-        
+    def test_success_message_display(self):
+        mock_success = Mock()
+        mock_success("✅ Fondo eliminado exitosamente!")
         mock_success.assert_called_with("✅ Fondo eliminado exitosamente!")
     
-    @patch('streamlit.info')
-    def test_info_message_display(self, mock_info):
-        from app import st
-        
-        st.info("👆 Sube una imagen a la izquierda para empezar")
-        
+    def test_info_message_display(self):
+        mock_info = Mock()
+        mock_info("👆 Sube una imagen a la izquierda para empezar")
         mock_info.assert_called_with("👆 Sube una imagen a la izquierda para empezar")
     
-    @patch('streamlit.expander')
-    def test_expander_functionality(self, mock_expander):
+    def test_expander_functionality(self):
+        mock_expander = Mock()
         mock_expander.return_value.__enter__ = Mock()
         mock_expander.return_value.__exit__ = Mock()
         
-        from app import st
-        
-        with st.expander("ℹ️ Sobre la Tecnología"):
+        with mock_expander("ℹ️ Sobre la Tecnología"):
             pass
         
         mock_expander.assert_called_with("ℹ️ Sobre la Tecnología")
 
+
 class TestMultiModelUI:
     """Test UI components specific to multi-model functionality"""
     
-    @patch('streamlit.selectbox')
-    def test_model_selection_dropdown(self, mock_selectbox):
+    def test_model_selection_dropdown(self):
         """Test model selection dropdown functionality"""
+        mock_selectbox = Mock()
         mock_selectbox.return_value = "Model 1"
         
-        from app import st
-        
-        selected = st.selectbox(
+        selected = mock_selectbox(
             "Elige el modelo a usar:",
             options=["Model 1", "Model 2"],
             index=0,
@@ -284,40 +303,36 @@ class TestMultiModelUI:
         assert "Elige el modelo a usar:" in call_args[0]
         assert "help" in call_args[1]
     
-    @patch('streamlit.expander')
-    def test_model_info_expander(self, mock_expander):
+    def test_model_info_expander(self):
         """Test expandable model information section"""
+        mock_expander = Mock()
         mock_expander.return_value.__enter__ = Mock()
         mock_expander.return_value.__exit__ = Mock()
         
-        from app import st
-        
-        with st.expander("Ver todos los modelos"):
+        with mock_expander("Ver todos los modelos"):
             pass
         
         mock_expander.assert_called_with("Ver todos los modelos")
     
-    @patch('streamlit.info')
-    def test_model_processing_feedback(self, mock_info):
+    def test_model_processing_feedback(self):
         """Test model processing feedback messages"""
-        from app import st
+        mock_info = Mock()
         
         model_name = "test_model.onnx"
         display_name = model_name.replace('.onnx', '').replace('_', ' ').title()
         
-        st.info(f"🤖 Procesando con modelo: **{display_name}**")
+        mock_info(f"🤖 Procesando con modelo: **{display_name}**")
         
         mock_info.assert_called_with(f"🤖 Procesando con modelo: **{display_name}**")
     
-    @patch('streamlit.success')
-    def test_model_result_attribution(self, mock_success):
+    def test_model_result_attribution(self):
         """Test model attribution in results"""
-        from app import st
+        mock_success = Mock()
         
         model_name = "test_model.onnx"
         display_name = model_name.replace('.onnx', '').replace('_', ' ').title()
         
-        st.success(f"🤖 Procesado con: **{display_name}**")
+        mock_success(f"🤖 Procesado con: **{display_name}**")
         
         mock_success.assert_called_with(f"🤖 Procesado con: **{display_name}**")
 

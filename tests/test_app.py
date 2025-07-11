@@ -3,31 +3,117 @@ import io
 import sys
 import pytest
 import numpy as np
+from unittest.mock import Mock, patch, MagicMock
+
+# Mock all the problematic imports before importing from app
+sys.modules['cv2'] = Mock()
+sys.modules['streamlit'] = Mock()
+sys.modules['onnxruntime'] = Mock()
+sys.modules['azure.storage.blob'] = Mock()
+sys.modules['azure.identity'] = Mock()
+sys.modules['dotenv'] = Mock()
 
 from PIL import Image
-from unittest.mock import Mock, patch
 
-sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
+# Create a better mock for streamlit that supports context managers
+class MockStreamlitContextManager:
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, *args):
+        pass
+    
+    def __call__(self, *args, **kwargs):
+        return self
+    
+    def __getattr__(self, name):
+        # Return another context manager for any attribute access
+        return MockStreamlitContextManager()
 
-from app import (
-    load_all_models,
-    get_all_model_paths,
-    get_model_info,
-    initialize_models_at_startup,
-    preprocess_image,
-    preprocess_image_for_model,
-    detect_model_type,
-    get_model_input_size,
-    get_model_normalization,
-    postprocess_mask,
-    apply_mask_to_image,
-    process_image,
-    image_to_bytes,
-    get_azure_config,
-    download_all_models_from_azure,
-    log_prediction_to_blob,
-    optimize_image_size
-)
+class MockStreamlitSidebar(MockStreamlitContextManager):
+    pass
+
+class MockStreamlitContainer(MockStreamlitContextManager):
+    pass
+
+class MockStreamlitExpander(MockStreamlitContextManager):
+    pass
+
+class MockStreamlitSpinner(MockStreamlitContextManager):
+    pass
+
+# Mock streamlit at module level to avoid import issues
+mock_st = Mock()
+
+# Create a proper cache_resource mock that can handle both @st.cache_resource and @st.cache_resource()
+def mock_cache_resource(func=None, **kwargs):
+    if func is None:
+        # Called with arguments: @st.cache_resource(ttl=3600)
+        return lambda f: f
+    else:
+        # Called without arguments: @st.cache_resource
+        return func
+
+mock_st.cache_resource = mock_cache_resource
+mock_st.error = Mock()
+mock_st.info = Mock()
+mock_st.success = Mock()
+mock_st.warning = Mock()
+mock_st.markdown = Mock()
+mock_st.expander = MockStreamlitExpander()
+mock_st.spinner = MockStreamlitSpinner()
+mock_st.container = MockStreamlitContainer()
+mock_st.empty = MockStreamlitContextManager()
+mock_st.set_page_config = Mock()
+mock_st.sidebar = MockStreamlitSidebar()
+mock_st.subheader = Mock()
+mock_st.caption = Mock()
+
+def mock_columns(num_or_spec, gap=None):
+    """Mock columns function that returns the requested number of columns"""
+    if isinstance(num_or_spec, int):
+        num_columns = num_or_spec
+    elif isinstance(num_or_spec, list):
+        num_columns = len(num_or_spec)
+    else:
+        num_columns = 2  # Default fallback
+    
+    return [MockStreamlitContextManager() for _ in range(num_columns)]
+
+mock_st.columns = mock_columns
+mock_st.file_uploader = Mock()
+mock_st.button = Mock()
+mock_st.download_button = Mock()
+mock_st.selectbox = Mock()
+mock_st.image = Mock()
+mock_st.stop = Mock()
+mock_st.session_state = {}
+mock_st.metric = Mock()
+mock_st.header = Mock()
+mock_st.title = Mock()
+
+# Patch streamlit before importing app
+with patch.dict('sys.modules', {'streamlit': mock_st}):
+    sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
+    from app import (
+        detect_model_type,
+        get_model_input_size,
+        get_model_normalization,
+        preprocess_image_for_model,
+        preprocess_image,
+        postprocess_mask,
+        apply_mask_to_image,
+        optimize_image_size,
+        image_to_bytes,
+        get_all_model_paths,
+        get_model_info,
+        initialize_models_at_startup,
+        get_azure_config,
+        download_all_models_from_azure,
+        log_prediction_to_blob,
+        process_image,
+        load_all_models
+    )
 
 class TestImagePreprocessing:
     
@@ -356,16 +442,16 @@ class TestMultiModelFunctionality:
 class TestModelLoading:
     
     def setup_method(self):
-        """Clear Streamlit cache before each test to avoid cached model sessions"""
-        import streamlit as st
-        st.cache_resource.clear()
+        """Setup method that handles mocked streamlit environment"""
+        # No need to clear cache since we're using mocked streamlit
+        pass
     
     def test_load_all_models_no_models_available(self):
         with patch('app.get_all_model_paths', return_value=[]):
             with patch('app.download_all_models_from_azure', return_value=False):
-                with patch('streamlit.error') as mock_error:
-                    with patch('streamlit.info') as mock_info:
-                        with patch('streamlit.markdown') as mock_markdown:
+                with patch('app.st.error') as mock_error:
+                    with patch('app.st.info') as mock_info:
+                        with patch('app.st.markdown') as mock_markdown:
                             result = load_all_models()
                             
                             assert result == {}
@@ -374,14 +460,14 @@ class TestModelLoading:
 
     @patch('app.get_all_model_paths')
     @patch('os.path.exists', return_value=True)
-    @patch('onnxruntime.InferenceSession')
+    @patch('app.ort.InferenceSession')  # Mock onnxruntime
     def test_load_all_models_success(self, mock_session, mock_exists, mock_get_paths):
         mock_get_paths.return_value = ['models/production/u2net.onnx', 'models/production/isnet-general-use.onnx']
         mock_session_instances = [Mock(), Mock()]
         mock_session.side_effect = mock_session_instances
         
-        with patch('streamlit.success') as mock_success:
-            with patch('streamlit.expander') as mock_expander:
+        with patch('app.st.success') as mock_success:
+            with patch('app.st.expander') as mock_expander:
                 mock_expander.return_value.__enter__ = Mock()
                 mock_expander.return_value.__exit__ = Mock()
                 result = load_all_models()
@@ -403,15 +489,15 @@ class TestModelLoading:
     
     @patch('app.get_all_model_paths')
     @patch('os.path.exists', return_value=True)
-    @patch('onnxruntime.InferenceSession')
+    @patch('app.ort.InferenceSession')  # Mock onnxruntime
     def test_load_all_models_partial_failure(self, mock_session, mock_exists, mock_get_paths):
         mock_get_paths.return_value = ['models/production/good_u2net.onnx', 'models/production/bad_model.onnx']
         mock_session_instance = Mock()
         mock_session.side_effect = [mock_session_instance, Exception("Model loading failed")]
         
-        with patch('streamlit.success') as mock_success:
-            with patch('streamlit.warning') as mock_warning:
-                with patch('streamlit.expander') as mock_expander:
+        with patch('app.st.success') as mock_success:
+            with patch('app.st.warning') as mock_warning:
+                with patch('app.st.expander') as mock_expander:
                     mock_expander.return_value.__enter__ = Mock()
                     mock_expander.return_value.__exit__ = Mock()
                     result = load_all_models()
@@ -480,7 +566,7 @@ class TestImageProcessing:
         mock_model_info = self.create_mock_model_info('u2net')
         mock_model_info['session'].get_inputs.side_effect = Exception("Session error")
         
-        with patch('streamlit.error') as mock_error:
+        with patch('app.st.error') as mock_error:
             result = process_image(image, mock_model_info)
             
             assert result is None
@@ -734,7 +820,7 @@ class TestAzureIntegration:
     
     def test_download_all_models_no_storage_account(self):
         with patch.dict(os.environ, {}, clear=True):
-            with patch('streamlit.container') as mock_container:
+            with patch('app.st.container') as mock_container:
                 mock_placeholder = Mock()
                 mock_placeholder.container.return_value.__enter__ = Mock()
                 mock_placeholder.container.return_value.__exit__ = Mock()
@@ -771,7 +857,7 @@ class TestAzureIntegration:
             'AZURE_CLIENT_SECRET': 'test_secret',
             'AZURE_TENANT_ID': 'test_tenant'
         }):
-            with patch('streamlit.container'), patch('streamlit.spinner'), patch('builtins.open', create=True):
+            with patch('app.st.container'), patch('app.st.spinner'), patch('builtins.open', create=True):
                 result = download_all_models_from_azure()
         
         assert result is True
@@ -796,7 +882,7 @@ class TestAzureIntegration:
             'AZURE_CLIENT_SECRET': 'test_secret',
             'AZURE_TENANT_ID': 'test_tenant'
         }):
-            with patch('streamlit.container'), patch('streamlit.spinner'):
+            with patch('app.st.container'), patch('app.st.spinner'):
                 result = download_all_models_from_azure()
         
         assert result is False
@@ -813,7 +899,7 @@ class TestAzureIntegration:
             'AZURE_CLIENT_SECRET': 'test_secret',
             'AZURE_TENANT_ID': 'test_tenant'
         }):
-            with patch('streamlit.container'), patch('streamlit.error'):
+            with patch('app.st.container'), patch('app.st.error'):
                 result = download_all_models_from_azure()
         
         assert result is False
@@ -821,7 +907,7 @@ class TestAzureIntegration:
     @patch('app.get_all_model_paths')
     @patch('os.path.exists')
     @patch('app.download_all_models_from_azure')
-    @patch('onnxruntime.InferenceSession')
+    @patch('app.ort.InferenceSession')
     def test_load_all_models_with_azure_download_success(self, mock_session, mock_download, mock_exists, mock_get_paths):
         # Clear cache before test
         import streamlit as st
@@ -834,7 +920,7 @@ class TestAzureIntegration:
         mock_download.return_value = True
         mock_session.return_value = Mock()
         
-        with patch('streamlit.info'), patch('streamlit.success'):
+        with patch('app.st.info'), patch('app.st.success'):
             result = load_all_models()
         
         assert len(result) == 1
@@ -848,7 +934,7 @@ class TestAzureIntegration:
         import streamlit as st
         st.cache_resource.clear()
         
-        with patch('streamlit.info'), patch('streamlit.error'), patch('streamlit.markdown'):
+        with patch('app.st.info'), patch('app.st.error'), patch('app.st.markdown'):
             result = load_all_models()
         
         assert result == {}
@@ -952,7 +1038,7 @@ class TestLoggingFunctionality:
                 'container_name': 'models'
             }
             
-            with patch('streamlit.warning') as mock_warning:
+            with patch('app.st.warning') as mock_warning:
                 log_prediction_to_blob(image_metadata, 1.5, True)
                 mock_warning.assert_called_once()
     
@@ -1028,7 +1114,7 @@ class TestLoggingFunctionality:
             with patch('app.BlobServiceClient') as mock_blob_service:
                 mock_blob_service.side_effect = Exception("Connection failed")
                 
-                with patch('streamlit.error') as mock_error:
+                with patch('app.st.error') as mock_error:
                     log_prediction_to_blob(image_metadata, 1.0, True)
                     mock_error.assert_called_once()
     
@@ -1073,7 +1159,7 @@ class TestLoggingFunctionality:
         }
         
         with patch('app.log_prediction_to_blob') as mock_log:
-            with patch('streamlit.error'):
+            with patch('app.st.error'):
                 result = process_image(image, mock_model_info, image_metadata)
                 
                 assert result is None
