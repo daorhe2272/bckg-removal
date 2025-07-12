@@ -21,16 +21,9 @@ def initialize_models_at_startup():
     Inicializa todos los modelos disponibles al arranque del contenedor, antes de que se muestre la UI.
     Esto asegura que todos los modelos estén listos desde el primer uso.
     """
-    print(f"[STARTUP] Verificando disponibilidad de modelos...")
-    
     model_paths = get_all_model_paths()
     if model_paths:
-        print(f"[STARTUP] ✅ {len(model_paths)} modelo(s) local(es) encontrado(s):")
-        for path in model_paths:
-            print(f"[STARTUP]   - {os.path.basename(path)}")
         return True
-    
-    print(f"[STARTUP] 📥 Modelos no encontrados localmente, descargando desde Azure...")
     
     # Intentar descarga sin UI de Streamlit
     try:
@@ -45,7 +38,6 @@ def initialize_models_at_startup():
         ]
         
         if not all(required_credentials):
-            print(f"[STARTUP] ⚠️ Credenciales de Azure incompletas, modelos se descargarán en primer uso")
             return False
         
         # Conectar a Azure Blob Storage
@@ -61,12 +53,9 @@ def initialize_models_at_startup():
                 onnx_blobs.append(blob)
         
         if not onnx_blobs:
-            print(f"[STARTUP] ❌ No se encontraron modelos en Azure, se intentará descargar en primer uso")
             return False
         
         # Descargar todos los modelos disponibles
-        print(f"[STARTUP] 📥 Descargando {len(onnx_blobs)} modelo(s)...")
-        
         # Crear directorio y descargar
         os.makedirs("models/production", exist_ok=True)
         
@@ -74,19 +63,14 @@ def initialize_models_at_startup():
             blob_name = blob.name
             download_path = os.path.join("models/production", os.path.basename(blob_name))
             
-            print(f"[STARTUP] 📥 Descargando: {os.path.basename(blob_name)}")
-            
             blob_client = blob_service_client.get_blob_client(container=config['container_name'], blob=blob_name)
             
             with open(download_path, "wb") as download_file:
                 download_file.write(blob_client.download_blob().readall())
         
-        print(f"[STARTUP] ✅ {len(onnx_blobs)} modelo(s) descargado(s) exitosamente")
         return True
         
     except Exception as e:
-        print(f"[STARTUP] ❌ Error al descargar modelos: {str(e)}")
-        print(f"[STARTUP] ⚠️ Los modelos se descargarán en el primer uso")
         return False
 
 st.set_page_config(
@@ -239,8 +223,6 @@ def log_prediction_to_blob(image_metadata, processing_time, success, error_messa
         
     except Exception as e:
         st.error(f"❌ Error al registrar la predicción en Azure Blob Storage: {str(e)}")
-        with st.expander("🔍 Ver detalles del error de logging"):
-            st.code(f"Error: {str(e)}\nMetadatos de la imagen: {json.dumps(image_metadata, indent=2)}")
 
 def download_all_models_from_azure(status_placeholder=None):
     """
@@ -354,9 +336,6 @@ def download_all_models_from_azure(status_placeholder=None):
     except Exception as e:
         with status_placeholder.container():
             st.error(f"❌ Error al descargar los modelos: {str(e)}")
-            with st.expander("🔍 Ver detalles del error"):
-                import traceback
-                st.code(traceback.format_exc())
         return False
 
 @st.cache_resource
@@ -679,15 +658,12 @@ def process_image(image: Image.Image, model_info, image_metadata=None):
         if was_resized:
             original_dims = f"{image.size[0]} × {image.size[1]}"
             optimized_dims = f"{optimized_image.size[0]} × {optimized_image.size[1]}"
-            print(f"[PROCESSING] Imagen redimensionada: {original_dims} → {optimized_dims} para mejor rendimiento")
         
         # Usar la imagen optimizada para el procesamiento
         processing_size = optimized_image.size
         
         # Preprocesar imagen según el tipo de modelo
         input_array = preprocess_image_for_model(optimized_image, model_type)
-        
-        print(f"[PROCESSING] Usando modelo tipo '{model_type}' con entrada {required_input_size[0]}x{required_input_size[1]}")
         
         # Ejecutar inferencia del modelo
         inputs = {session.get_inputs()[0].name: input_array}
@@ -754,271 +730,265 @@ def image_to_bytes(image: Image.Image) -> bytes:
     image.save(img_byte_arr, format='PNG')
     return img_byte_arr.getvalue()
 
-st.title("🖼️ Herramienta de Eliminación de Fondo")
-st.markdown("Sube una imagen para eliminar su fondo automáticamente usando IA. Selecciona entre múltiples modelos disponibles para obtener los mejores resultados.")
+def main():
+    """Main function that runs the Streamlit UI."""
+    st.title("🖼️ Herramienta de Eliminación de Fondo")
+    st.markdown("Sube una imagen para eliminar su fondo automáticamente usando IA. Selecciona entre múltiples modelos disponibles para obtener los mejores resultados.")
 
-with st.sidebar:
-    st.header("⚙️ Configuración")
-    config = get_azure_config()
-    
-    # Verificar si Azure está completamente configurado
-    azure_configured = all([
-        config['storage_account_name'],
-        config['client_id'],
-        config['client_secret'], 
-        config['tenant_id']
-    ])
-    
-    if azure_configured:
-        st.success("✅ Azure Storage configurado")
-        with st.expander("Ver detalles de configuración"):
-            st.code(f"""
+    with st.sidebar:
+        st.header("⚙️ Configuración")
+        config = get_azure_config()
+        
+        # Verificar si Azure está completamente configurado
+        azure_configured = all([
+            config['storage_account_name'],
+            config['client_id'],
+            config['client_secret'], 
+            config['tenant_id']
+        ])
+        
+        if azure_configured:
+            st.success("✅ Azure Storage configurado")
+            with st.expander("Ver detalles de configuración"):
+                st.code(f"""
 Storage Account: {config['storage_account_name']}
 Container: {config['container_name']}
 Model Search Path: production/*.onnx (todos)
 Client ID: {config['client_id'][:6]}***
 Tenant ID: {config['tenant_id'][:6]}***
-            """)
-    else:
-        st.warning("⚠️ Azure Storage no configurado completamente")
-        st.info("Variables de entorno requeridas para Service Principal:")
-        st.code("""
+                """)
+        else:
+            st.warning("⚠️ Azure Storage no configurado completamente")
+            st.info("Variables de entorno requeridas para Service Principal:")
+            st.code("""
 AZURE_STORAGE_ACCOUNT_NAME
 AZURE_CLIENT_ID
 AZURE_CLIENT_SECRET  
 AZURE_TENANT_ID
-        """)
+            """)
 
-initialize_models_at_startup()
+    initialize_models_at_startup()
 
-model_info = load_all_models()
+    model_info = load_all_models()
 
-if not model_info:
-    st.stop()
+    if not model_info:
+        st.stop()
 
-with st.sidebar:
-    st.markdown("---")
-    st.subheader("🤖 Selección de Modelo")
-    
-    model_paths = get_all_model_paths()
-    if model_paths and model_info:
-        # Crear opciones para el selector de modelos
-        model_options = {}
-        for model_path in model_paths:
-            model_file_info = get_model_info(model_path)
-            if model_file_info and model_file_info['name'] in model_info:
-                model_name = model_file_info['name']
-                model_type = model_info[model_name]['type']
-                input_size = model_info[model_name]['input_size']
-                display_name = f"{model_file_info['display_name']} ({model_type.upper()}, {input_size[0]}x{input_size[1]})"
-                model_options[display_name] = model_name
+    with st.sidebar:
+        st.markdown("---")
+        st.subheader("🤖 Selección de Modelo")
         
-        if len(model_options) > 1:
-            # Si hay múltiples modelos, mostrar selector
-            selected_model_display = st.selectbox(
-                "Elige el modelo a usar:",
-                options=list(model_options.keys()),
-                index=0,
-                help="Selecciona el modelo que mejor se adapte a tus necesidades. Los modelos IS-Net (1024x1024) ofrecen mejor calidad pero requieren más procesamiento."
-            )
-            selected_model_name = model_options[selected_model_display]
-            st.session_state.selected_model = selected_model_name
-            
-            # Mostrar información detallada del modelo seleccionado
-            selected_model_path = None
-            for path in model_paths:
-                if os.path.basename(path) == selected_model_name:
-                    selected_model_path = path
-                    break
-            
-            if selected_model_path:
-                model_file_info = get_model_info(selected_model_path)
-                selected_model_info = model_info[selected_model_name]
-                if model_file_info:
-                    st.info(f"📁 **{model_file_info['display_name']}**")
-                    st.caption(f"💾 Tamaño: {model_file_info['size_mb']} MB")
-                    st.caption(f"🏷️ Tipo: {selected_model_info['type'].upper()}")
-                    st.caption(f"� Entrada: {selected_model_info['input_size'][0]}x{selected_model_info['input_size'][1]} px")
-                    st.caption(f"�� Modificado: {model_file_info['modified_time'].strftime('%Y-%m-%d %H:%M')}")
-        else:
-            # Si solo hay un modelo, mostrarlo automáticamente
-            single_model_name = list(model_options.values())[0]
-            st.session_state.selected_model = single_model_name
-            st.info(f"📁 **Modelo único disponible**")
-            
-            single_model_path = None
-            for path in model_paths:
-                if os.path.basename(path) == single_model_name:
-                    single_model_path = path
-                    break
-            
-            if single_model_path:
-                model_file_info = get_model_info(single_model_path)
-                selected_model_info = model_info[single_model_name]
-                if model_file_info:
-                    st.caption(f"💾 Tamaño: {model_file_info['size_mb']} MB")
-                    st.caption(f"🏷️ Tipo: {selected_model_info['type'].upper()}")
-                    st.caption(f"📐 Entrada: {selected_model_info['input_size'][0]}x{selected_model_info['input_size'][1]} px")
-                    st.caption(f"📅 Modificado: {model_file_info['modified_time'].strftime('%Y-%m-%d %H:%M')}")
-        
-        # Mostrar resumen de todos los modelos disponibles
-        with st.expander("Ver todos los modelos"):
-            st.subheader("📊 Estado de los Modelos")
+        model_paths = get_all_model_paths()
+        if model_paths and model_info:
+            # Crear opciones para el selector de modelos
+            model_options = {}
             for model_path in model_paths:
                 model_file_info = get_model_info(model_path)
-                if model_file_info:
+                if model_file_info and model_file_info['name'] in model_info:
                     model_name = model_file_info['name']
-                    if model_name in model_info:
-                        status = "✅ Cargado"
-                        model_type = model_info[model_name]['type']
-                        input_size = model_info[model_name]['input_size']
-                        st.text(f"{status} {model_file_info['display_name']}")
-                        st.text(f"  Tipo: {model_type.upper()}")
-                        st.text(f"  Entrada: {input_size[0]}x{input_size[1]} px")
-                        st.text(f"  Tamaño: {model_file_info['size_mb']} MB")
-                        st.text("")
-                    else:
-                        st.text(f"❌ Error {model_file_info['display_name']}")
-    else:
-        st.warning("⚠️ Modelos no disponibles")
-        if 'selected_model' in st.session_state:
-            del st.session_state.selected_model
-    
+                    model_type = model_info[model_name]['type']
+                    input_size = model_info[model_name]['input_size']
+                    display_name = f"{model_file_info['display_name']} ({model_type.upper()}, {input_size[0]}x{input_size[1]})"
+                    model_options[display_name] = model_name
+            
+            if len(model_options) > 1:
+                # Si hay múltiples modelos, mostrar selector
+                selected_model_display = st.selectbox(
+                    "Elige el modelo a usar:",
+                    options=list(model_options.keys()),
+                    index=0,
+                    help="Selecciona el modelo que mejor se adapte a tus necesidades. Los modelos IS-Net (1024x1024) ofrecen mejor calidad pero requieren más procesamiento."
+                )
+                selected_model_name = model_options[selected_model_display]
+                st.session_state.selected_model = selected_model_name
+                
+                # Mostrar información detallada del modelo seleccionado
+                selected_model_path = None
+                for path in model_paths:
+                    if os.path.basename(path) == selected_model_name:
+                        selected_model_path = path
+                        break
+                
+                if selected_model_path:
+                    model_file_info = get_model_info(selected_model_path)
+                    selected_model_info = model_info[selected_model_name]
+                    if model_file_info:
+                        st.info(f"📁 **{model_file_info['display_name']}**")
+                        st.caption(f"💾 Tamaño: {model_file_info['size_mb']} MB")
+                        st.caption(f"🏷️ Tipo: {selected_model_info['type'].upper()}")
+                        st.caption(f"📐 Entrada: {selected_model_info['input_size'][0]}x{selected_model_info['input_size'][1]} px")
+                        st.caption(f"📅 Modificado: {model_file_info['modified_time'].strftime('%Y-%m-%d %H:%M')}")
+            else:
+                # Si solo hay un modelo, mostrarlo automáticamente
+                single_model_name = list(model_options.values())[0]
+                st.session_state.selected_model = single_model_name
+                st.info(f"📁 **Modelo único disponible**")
+                
+                single_model_path = None
+                for path in model_paths:
+                    if os.path.basename(path) == single_model_name:
+                        single_model_path = path
+                        break
+                
+                if single_model_path:
+                    model_file_info = get_model_info(single_model_path)
+                    selected_model_info = model_info[single_model_name]
+                    if model_file_info:
+                        st.caption(f"💾 Tamaño: {model_file_info['size_mb']} MB")
+                        st.caption(f"🏷️ Tipo: {selected_model_info['type'].upper()}")
+                        st.caption(f"📐 Entrada: {selected_model_info['input_size'][0]}x{selected_model_info['input_size'][1]} px")
+                        st.caption(f"📅 Modificado: {model_file_info['modified_time'].strftime('%Y-%m-%d %H:%M')}")
+            
+            # Mostrar resumen de todos los modelos disponibles
+            with st.expander("Ver todos los modelos"):
+                st.subheader("📊 Estado de los Modelos")
+                for model_path in model_paths:
+                    model_file_info = get_model_info(model_path)
+                    if model_file_info:
+                        model_name = model_file_info['name']
+                        if model_name in model_info:
+                            status = "✅ Cargado"
+                            model_type = model_info[model_name]['type']
+                            input_size = model_info[model_name]['input_size']
+                            st.text(f"{status} {model_file_info['display_name']}")
+                            st.text(f"  Tipo: {model_type.upper()}")
+                            st.text(f"  Entrada: {input_size[0]}x{input_size[1]} px")
+                            st.text(f"  Tamaño: {model_file_info['size_mb']} MB")
+                            st.text("")
+                        else:
+                            st.text(f"❌ Error {model_file_info['display_name']}")
+        else:
+            st.warning("⚠️ Modelos no disponibles")
+            if 'selected_model' in st.session_state:
+                del st.session_state.selected_model
+        
+        st.markdown("---")
+        st.subheader("⚡ Optimización")
+        st.caption("📐 Imágenes grandes se optimizan automáticamente para mejor rendimiento")
+
+    col1, col2 = st.columns([1, 1], gap="large")
+
+    with col1:
+        st.header("📤 Subir Imagen")
+        
+        uploaded_file = st.file_uploader(
+            "Arrastra y suelta una imagen aquí o haz clic para buscar",
+            type=["png", "jpg", "jpeg", "bmp", "tiff"],
+            help="Formatos soportados: PNG, JPG, JPEG, BMP, TIFF"
+        )
+        
+        if uploaded_file is not None:
+            st.subheader("Imagen Original")
+            original_image = Image.open(uploaded_file)
+            st.image(original_image, use_column_width=True)
+            
+            st.subheader("📋 Detalles de la Imagen")
+            
+            detail_col1, detail_col2, detail_col3 = st.columns(3)
+            
+            with detail_col1:
+                st.metric(
+                    label="📄 Archivo",
+                    value=uploaded_file.name
+                )
+            
+            with detail_col2:
+                st.metric(
+                    label="💾 Tamaño",
+                    value=f"{uploaded_file.size / 1024:.1f} KB"
+                )
+            
+            with detail_col3:
+                st.metric(
+                    label="📐 Dimensiones",
+                    value=f"{original_image.size[0]} × {original_image.size[1]} px"
+                )
+
+    with col2:
+        st.header("✨ Imagen Procesada")
+        
+        if uploaded_file is not None:
+            image_metadata = {
+                'name': uploaded_file.name,
+                'size_kb': round(uploaded_file.size / 1024, 2),
+                'width_px': original_image.size[0],
+                'height_px': original_image.size[1],
+                'format': original_image.format or 'unknown',
+                'mode': original_image.mode
+            }
+            
+            if st.button("🚀 Eliminar Fondo", type="primary", use_container_width=True):
+                # Verificar que hay un modelo seleccionado
+                if 'selected_model' not in st.session_state:
+                    st.error("❌ No hay ningún modelo seleccionado. Verifica que los modelos estén cargados correctamente.")
+                    st.stop()
+                
+                selected_model_name = st.session_state.selected_model
+                if selected_model_name not in model_info:
+                    st.error(f"❌ El modelo seleccionado '{selected_model_name}' no está disponible.")
+                    st.stop()
+                
+                selected_model_info = model_info[selected_model_name]
+                
+                # Verificar si la imagen será optimizada
+                _, will_be_resized = optimize_image_size(original_image, max_dimension=2000)
+                
+                if will_be_resized:
+                    st.info("⚡ Imagen grande detectada. Se optimizará automáticamente para mejor rendimiento.")
+                
+                # Mostrar información del modelo que se está usando
+                st.info(f"🤖 Procesando con modelo: **{selected_model_name.replace('.onnx', '').replace('_', ' ').title()}**")
+                
+                with st.spinner("Procesando imagen con IA..."):
+                    # Actualizar metadatos con información del modelo
+                    image_metadata['model_used'] = selected_model_name
+                    
+                    processed_image = process_image(original_image, selected_model_info, image_metadata)
+                    
+                    if processed_image:
+                        st.session_state.processed_image = processed_image
+                        st.session_state.original_filename = uploaded_file.name
+                        st.session_state.was_optimized = will_be_resized
+                        st.session_state.model_used = selected_model_name
+            
+            if "processed_image" in st.session_state:
+                st.image(st.session_state.processed_image, use_column_width=True)
+                
+                # Mostrar información del modelo usado
+                if st.session_state.get("model_used"):
+                    model_display_name = st.session_state.model_used.replace('.onnx', '').replace('_', ' ').title()
+                    st.success(f"🤖 Procesado con: **{model_display_name}**")
+                
+                # Mostrar información sobre la optimización si aplica
+                if st.session_state.get("was_optimized", False):
+                    original_dims = f"{original_image.size[0]} × {original_image.size[1]}"
+                    processed_dims = f"{st.session_state.processed_image.size[0]} × {st.session_state.processed_image.size[1]}"
+                    st.info(f"⚡ Imagen optimizada: {original_dims} → {processed_dims} px para mejor rendimiento")
+                
+                filename_base = st.session_state.original_filename.rsplit('.', 1)[0]
+                download_filename = f"{filename_base}_no_background.png"
+                
+                processed_image_bytes = image_to_bytes(st.session_state.processed_image)
+                
+                st.download_button(
+                    label="📥 Descargar Imagen Procesada",
+                    data=processed_image_bytes,
+                    file_name=download_filename,
+                    mime="image/png",
+                    type="secondary",
+                    use_container_width=True
+                )
+                
+                st.success("✅ Fondo eliminado exitosamente!")
+        else:
+            st.info("👆 Sube una imagen a la izquierda para empezar")
+
     st.markdown("---")
-    st.subheader("⚡ Optimización")
-    st.caption("📐 Imágenes > 2000px se redimensionan automáticamente")
-    st.caption("🚀 Mejora significativa en velocidad de procesamiento")
-    st.caption("📱 Mantiene calidad y proporciones originales")
-
-col1, col2 = st.columns([1, 1], gap="large")
-
-with col1:
-    st.header("📤 Subir Imagen")
-    
-    uploaded_file = st.file_uploader(
-        "Arrastra y suelta una imagen aquí o haz clic para buscar",
-        type=["png", "jpg", "jpeg", "bmp", "tiff"],
-        help="Formatos soportados: PNG, JPG, JPEG, BMP, TIFF"
+    st.markdown(
+        "**Cómo funciona:** Esta herramienta utiliza redes neuronales para eliminar automáticamente los fondos de las imágenes. "
+        "Puedes elegir entre múltiples modelos disponibles. Las imágenes grandes se optimizan automáticamente para mayor velocidad."
     )
-    
-    if uploaded_file is not None:
-        st.subheader("Imagen Original")
-        original_image = Image.open(uploaded_file)
-        st.image(original_image, use_column_width=True)
-        
-        st.subheader("📋 Detalles de la Imagen")
-        
-        detail_col1, detail_col2, detail_col3 = st.columns(3)
-        
-        with detail_col1:
-            st.metric(
-                label="📄 Archivo",
-                value=uploaded_file.name
-            )
-        
-        with detail_col2:
-            st.metric(
-                label="💾 Tamaño",
-                value=f"{uploaded_file.size / 1024:.1f} KB"
-            )
-        
-        with detail_col3:
-            st.metric(
-                label="📐 Dimensiones",
-                value=f"{original_image.size[0]} × {original_image.size[1]} px"
-            )
 
-with col2:
-    st.header("✨ Imagen Procesada")
-    
-    if uploaded_file is not None:
-        image_metadata = {
-            'name': uploaded_file.name,
-            'size_kb': round(uploaded_file.size / 1024, 2),
-            'width_px': original_image.size[0],
-            'height_px': original_image.size[1],
-            'format': original_image.format or 'unknown',
-            'mode': original_image.mode
-        }
-        
-        if st.button("🚀 Eliminar Fondo", type="primary", use_container_width=True):
-            # Verificar que hay un modelo seleccionado
-            if 'selected_model' not in st.session_state:
-                st.error("❌ No hay ningún modelo seleccionado. Verifica que los modelos estén cargados correctamente.")
-                st.stop()
-            
-            selected_model_name = st.session_state.selected_model
-            if selected_model_name not in model_info:
-                st.error(f"❌ El modelo seleccionado '{selected_model_name}' no está disponible.")
-                st.stop()
-            
-            selected_model_info = model_info[selected_model_name]
-            
-            # Verificar si la imagen será optimizada
-            _, will_be_resized = optimize_image_size(original_image, max_dimension=2000)
-            
-            if will_be_resized:
-                st.info("⚡ Imagen grande detectada. Se optimizará automáticamente para mejor rendimiento.")
-            
-            # Mostrar información del modelo que se está usando
-            st.info(f"🤖 Procesando con modelo: **{selected_model_name.replace('.onnx', '').replace('_', ' ').title()}**")
-            
-            with st.spinner("Procesando imagen con IA..."):
-                # Actualizar metadatos con información del modelo
-                image_metadata['model_used'] = selected_model_name
-                
-                processed_image = process_image(original_image, selected_model_info, image_metadata)
-                
-                if processed_image:
-                    st.session_state.processed_image = processed_image
-                    st.session_state.original_filename = uploaded_file.name
-                    st.session_state.was_optimized = will_be_resized
-                    st.session_state.model_used = selected_model_name
-        
-        if "processed_image" in st.session_state:
-            st.image(st.session_state.processed_image, use_column_width=True)
-            
-            # Mostrar información del modelo usado
-            if st.session_state.get("model_used"):
-                model_display_name = st.session_state.model_used.replace('.onnx', '').replace('_', ' ').title()
-                st.success(f"🤖 Procesado con: **{model_display_name}**")
-            
-            # Mostrar información sobre la optimización si aplica
-            if st.session_state.get("was_optimized", False):
-                original_dims = f"{original_image.size[0]} × {original_image.size[1]}"
-                processed_dims = f"{st.session_state.processed_image.size[0]} × {st.session_state.processed_image.size[1]}"
-                st.info(f"⚡ Imagen optimizada: {original_dims} → {processed_dims} px para mejor rendimiento")
-            
-            filename_base = st.session_state.original_filename.rsplit('.', 1)[0]
-            download_filename = f"{filename_base}_no_background.png"
-            
-            processed_image_bytes = image_to_bytes(st.session_state.processed_image)
-            
-            st.download_button(
-                label="📥 Descargar Imagen Procesada",
-                data=processed_image_bytes,
-                file_name=download_filename,
-                mime="image/png",
-                type="secondary",
-                use_container_width=True
-            )
-            
-            st.success("✅ Fondo eliminado exitosamente!")
-    else:
-        st.info("👆 Sube una imagen a la izquierda para empezar")
 
-st.markdown("---")
-st.markdown(
-    "**Cómo funciona:** Esta herramienta utiliza redes neuronales U2-Net para detectar y eliminar automáticamente los fondos de las imágenes. "
-    "Puedes elegir entre múltiples modelos disponibles, cada uno optimizado para diferentes tipos de imágenes. "
-    "Las imágenes grandes (>2000px) se optimizan automáticamente para mayor velocidad manteniendo la calidad. "
-    "La imagen procesada tendrá un fondo transparente que podrás usar en tus proyectos."
-)
-
-with st.expander("ℹ️ Sobre la Tecnología"):
-    st.markdown("""
-    - **Modelo U2-Net**: Una arquitectura de aprendizaje profundo diseñada específicamente para la detección de objetos prominentes
-    - **ONNX Runtime**: Motor de inferencia optimizado para el despliegue de modelos de IA multiplataforma
-    - **Procesamiento de Imágenes**: OpenCV y PIL para la manipulación eficiente de imágenes
-    - **Streamlit**: Framework web moderno para crear aplicaciones de datos interactivas
-    """) 
+if __name__ == "__main__":
+    main() 

@@ -6,7 +6,34 @@ import numpy as np
 from unittest.mock import Mock, patch, MagicMock
 
 # Mock all the problematic imports before importing from app
-sys.modules['cv2'] = Mock()
+# Create a proper mock for cv2 that simulates image resizing
+class MockCV2:
+    # Add cv2 constants
+    INTER_LINEAR = 1
+    INTER_CUBIC = 2
+    INTER_NEAREST = 0
+    
+    @staticmethod
+    def resize(image, size, interpolation=None):
+        """Mock cv2.resize that actually resizes numpy arrays"""
+        # Use PIL for resizing since it's available
+        from PIL import Image as PILImage
+        
+        # Convert numpy array to PIL Image
+        if len(image.shape) == 2:
+            # Grayscale image
+            pil_img = PILImage.fromarray(image)
+        else:
+            # Color image  
+            pil_img = PILImage.fromarray(image)
+        
+        # Resize using PIL
+        resized_pil = pil_img.resize(size, PILImage.Resampling.BILINEAR)
+        
+        # Convert back to numpy array
+        return np.array(resized_pil)
+
+sys.modules['cv2'] = MockCV2()
 sys.modules['streamlit'] = Mock()
 sys.modules['onnxruntime'] = Mock()
 sys.modules['azure.storage.blob'] = Mock()
@@ -43,7 +70,101 @@ class MockStreamlitSpinner(MockStreamlitContextManager):
     pass
 
 # Mock streamlit at module level to avoid import issues
+class MockStreamlitContainer:
+    """Mock streamlit container that supports context manager protocol"""
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+    
+    def container(self):
+        return MockStreamlitContainer()
+    
+    def empty(self):
+        return MockStreamlitContainer()
+    
+    def __call__(self):
+        """Make the container callable for st.container() calls"""
+        return MockStreamlitContainer()
+
+class MockStreamlitSpinner:
+    """Mock streamlit spinner that supports context manager protocol"""
+    def __init__(self, text=""):
+        self.text = text
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+    
+    def __call__(self, text=""):
+        """Make the spinner callable for st.spinner() calls"""
+        return MockStreamlitSpinner(text)
+
+class MockStreamlitExpander:
+    """Mock streamlit expander that supports context manager protocol"""
+    def __init__(self, label=""):
+        self.label = label
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+    
+    def __call__(self, label=""):
+        """Make the expander callable for st.expander() calls"""
+        return MockStreamlitExpander(label)
+
+class MockCacheResource:
+    """Mock cache_resource that supports both @st.cache_resource and @st.cache_resource() syntax"""
+    def __call__(self, func=None, **kwargs):
+        if func is None:
+            # Called with arguments: @st.cache_resource(ttl=3600)
+            return lambda f: f
+        else:
+            # Called without arguments: @st.cache_resource
+            return func
+    
+    def clear(self):
+        """Mock clear method for cache_resource"""
+        pass
+
 mock_st = Mock()
+
+# Create proper context manager mocks
+mock_st.container = MockStreamlitContainer()
+mock_st.spinner = MockStreamlitSpinner()
+mock_st.expander = MockStreamlitExpander()
+
+# Create proper cache_resource mock
+mock_st.cache_resource = MockCacheResource()
+
+# Add other streamlit methods
+mock_st.error = Mock()
+mock_st.info = Mock()
+mock_st.success = Mock()
+mock_st.warning = Mock()
+mock_st.markdown = Mock()
+mock_st.text = Mock()
+mock_st.title = Mock()
+mock_st.header = Mock()
+mock_st.subheader = Mock()
+mock_st.button = Mock()
+mock_st.download_button = Mock()
+mock_st.file_uploader = Mock()
+mock_st.selectbox = Mock()
+mock_st.sidebar = Mock()
+mock_st.columns = Mock()
+mock_st.image = Mock()
+mock_st.balloons = Mock()
+mock_st.rerun = Mock()
+mock_st.stop = Mock()
+mock_st.set_page_config = Mock()
+
+sys.modules['streamlit'] = mock_st
 
 # Create a proper cache_resource mock that can handle both @st.cache_resource and @st.cache_resource()
 def mock_cache_resource(func=None, **kwargs):
@@ -123,7 +244,8 @@ class TestImagePreprocessing:
         
         assert result.shape == (1, 3, 320, 320)
         assert result.dtype == np.float32
-        assert 0 <= result.min() <= result.max() <= 1
+        # ImageNet normalization can produce values outside [0,1] range
+        assert -3.0 <= result.min() <= result.max() <= 3.0
     
     def test_preprocess_image_resize(self):
         image = Image.new('RGB', (500, 300), color=(128, 128, 128))
@@ -135,15 +257,23 @@ class TestImagePreprocessing:
         image = Image.new('RGB', (50, 50), color=(255, 255, 255))
         result = preprocess_image(image)
         
-        expected_value = 255.0 / 255.0
-        np.testing.assert_almost_equal(result.max(), expected_value, decimal=5)
+        # For white pixels with ImageNet normalization, expect values around 2.6
+        # (1.0 - 0.406) / 0.225 ≈ 2.64 for blue channel (highest)
+        assert result.max() > 2.0  # Should be around 2.6
+        assert result.max() < 3.0
     
     def test_preprocess_image_channel_order(self):
         red_image = Image.new('RGB', (50, 50), color=(255, 0, 0))
         result = preprocess_image(red_image)
         
-        assert result[0, 0].mean() > result[0, 1].mean()
-        assert result[0, 0].mean() > result[0, 2].mean()
+        # For red image, red channel should have highest normalized value
+        # This test checks relative ordering rather than absolute values
+        red_mean = result[0, 0].mean()
+        green_mean = result[0, 1].mean()  
+        blue_mean = result[0, 2].mean()
+        
+        assert red_mean > green_mean
+        assert red_mean > blue_mean
 
 
 class TestMaskPostprocessing:
@@ -523,14 +653,27 @@ class TestImageProcessing:
         mock_input.name = 'input'
         mock_session.get_inputs.return_value = [mock_input]
         
-        fake_output = np.random.rand(1, 1, 320, 320).astype(np.float32)
+        # Create deterministic output for more predictable testing
+        fake_output = np.ones((1, 1, 320, 320), dtype=np.float32) * 0.8
         mock_session.run.return_value = [fake_output]
         
         return mock_session
     
     def create_mock_model_info(self, model_type='u2net'):
         """Create mock model_info dictionary for testing"""
-        mock_session = self.create_mock_session()
+        mock_session = Mock()
+        mock_input = Mock()
+        mock_input.name = 'input'
+        mock_session.get_inputs.return_value = [mock_input]
+        
+        # Create appropriate output size based on model type
+        if model_type == 'isnet':
+            fake_output = np.ones((1, 1, 1024, 1024), dtype=np.float32) * 0.8
+        else:
+            fake_output = np.ones((1, 1, 320, 320), dtype=np.float32) * 0.8
+            
+        mock_session.run.return_value = [fake_output]
+        
         return {
             'session': mock_session,
             'type': model_type,
@@ -951,10 +1094,10 @@ class TestImageProcessingWithMultipleModels:
         mock_session.get_inputs.return_value = [mock_input]
         
         if model_type == 'isnet':
-            fake_output = np.random.rand(1, 1, 1024, 1024).astype(np.float32)
+            fake_output = np.ones((1, 1, 1024, 1024), dtype=np.float32) * 0.8
             mock_session.run.return_value = [[fake_output]]  # Nested for IS-Net
         else:
-            fake_output = np.random.rand(1, 1, 320, 320).astype(np.float32)
+            fake_output = np.ones((1, 1, 320, 320), dtype=np.float32) * 0.8
             mock_session.run.return_value = [fake_output]
         
         return {
@@ -1012,7 +1155,7 @@ class TestLoggingFunctionality:
         mock_input.name = 'input'
         mock_session.get_inputs.return_value = [mock_input]
         
-        fake_output = np.random.rand(1, 1, 320, 320).astype(np.float32)
+        fake_output = np.ones((1, 1, 320, 320), dtype=np.float32) * 0.8
         mock_session.run.return_value = [fake_output]
         
         return {

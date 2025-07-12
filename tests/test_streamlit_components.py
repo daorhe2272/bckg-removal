@@ -16,23 +16,126 @@ sys.modules['azure.identity'] = Mock()
 sys.modules['dotenv'] = Mock()
 
 # Mock streamlit at module level to avoid import issues
+class MockStreamlitContainer:
+    """Mock streamlit container that supports context manager protocol"""
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+    
+    def container(self):
+        return MockStreamlitContainer()
+    
+    def empty(self):
+        return MockStreamlitContainer()
+    
+    def __call__(self):
+        """Make the container callable for st.container() calls"""
+        return MockStreamlitContainer()
+
+class MockStreamlitSpinner:
+    """Mock streamlit spinner that supports context manager protocol"""
+    def __init__(self, text=""):
+        self.text = text
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+    
+    def __call__(self, text=""):
+        """Make the spinner callable for st.spinner() calls"""
+        return MockStreamlitSpinner(text)
+
+class MockStreamlitExpander:
+    """Mock streamlit expander that supports context manager protocol"""
+    def __init__(self, label=""):
+        self.label = label
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+    
+    def __call__(self, label=""):
+        """Make the expander callable for st.expander() calls"""
+        return MockStreamlitExpander(label)
+
+class MockCacheResource:
+    """Mock cache_resource that supports both @st.cache_resource and @st.cache_resource() syntax"""
+    def __call__(self, func=None, **kwargs):
+        if func is None:
+            # Called with arguments: @st.cache_resource(ttl=3600)
+            return lambda f: f
+        else:
+            # Called without arguments: @st.cache_resource
+            return func
+    
+    def clear(self):
+        """Mock clear method for cache_resource"""
+        pass
+
 mock_st = Mock()
-mock_st.cache_resource = Mock()
-mock_st.cache_resource.return_value = lambda func: func  # Return function unmodified
+
+# Create proper context manager mocks
+mock_st.container = MockStreamlitContainer()
+mock_st.spinner = MockStreamlitSpinner()
+mock_st.expander = MockStreamlitExpander()
+
+# Create proper cache_resource mock
+mock_st.cache_resource = MockCacheResource()
+
+# Add other streamlit methods
 mock_st.error = Mock()
 mock_st.info = Mock()
 mock_st.success = Mock()
 mock_st.warning = Mock()
 mock_st.markdown = Mock()
-mock_st.expander = Mock()
-mock_st.spinner = Mock()
-mock_st.container = Mock()
-mock_st.empty = Mock()
 mock_st.button = Mock()
 mock_st.download_button = Mock()
 mock_st.file_uploader = Mock()
-mock_st.columns = Mock()
 mock_st.selectbox = Mock()
+mock_st.slider = Mock()
+mock_st.checkbox = Mock()
+mock_st.radio = Mock()
+mock_st.text_input = Mock()
+mock_st.text_area = Mock()
+mock_st.number_input = Mock()
+mock_st.color_picker = Mock()
+mock_st.date_input = Mock()
+mock_st.time_input = Mock()
+mock_st.sidebar = Mock()
+mock_st.columns = Mock()
+mock_st.tabs = Mock()
+mock_st.title = Mock()
+mock_st.header = Mock()
+mock_st.subheader = Mock()
+mock_st.caption = Mock()
+mock_st.text = Mock()
+mock_st.latex = Mock()
+mock_st.image = Mock()
+mock_st.audio = Mock()
+mock_st.video = Mock()
+mock_st.dataframe = Mock()
+mock_st.table = Mock()
+mock_st.json = Mock()
+mock_st.metric = Mock()
+mock_st.progress = Mock()
+mock_st.balloons = Mock()
+mock_st.snow = Mock()
+mock_st.toast = Mock()
+mock_st.rerun = Mock()
+mock_st.stop = Mock()
+mock_st.exception = Mock()
+mock_st.help = Mock()
+mock_st.get_option = Mock()
+mock_st.set_option = Mock()
+mock_st.set_page_config = Mock()
+
+sys.modules['streamlit'] = mock_st
 
 # Patch streamlit before importing app
 with patch.dict('sys.modules', {'streamlit': mock_st}):

@@ -15,9 +15,90 @@ sys.modules['azure.identity'] = Mock()
 sys.modules['dotenv'] = Mock()
 
 # Mock streamlit at module level to avoid import issues
+class MockStreamlitContainer:
+    """Mock streamlit container that supports context manager protocol"""
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+    
+    def container(self):
+        return MockStreamlitContainer()
+    
+    def empty(self):
+        return MockStreamlitContainer()
+    
+    def __call__(self):
+        """Make the container callable for st.container() calls"""
+        return MockStreamlitContainer()
+
+class MockStreamlitSpinner:
+    """Mock streamlit spinner that supports context manager protocol"""
+    def __init__(self, text=""):
+        self.text = text
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+    
+    def __call__(self, text=""):
+        """Make the spinner callable for st.spinner() calls"""
+        return MockStreamlitSpinner(text)
+
+class MockStreamlitExpander:
+    """Mock streamlit expander that supports context manager protocol"""
+    def __init__(self, label=""):
+        self.label = label
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+    
+    def __call__(self, label=""):
+        """Make the expander callable for st.expander() calls"""
+        return MockStreamlitExpander(label)
+
+class MockCacheResource:
+    """Mock cache_resource that supports both @st.cache_resource and @st.cache_resource() syntax"""
+    def __call__(self, func=None, **kwargs):
+        if func is None:
+            # Called with arguments: @st.cache_resource(ttl=3600)
+            return lambda f: f
+        else:
+            # Called without arguments: @st.cache_resource
+            return func
+    
+    def clear(self):
+        """Mock clear method for cache_resource"""
+        pass
+
 mock_st = Mock()
-mock_st.cache_resource = Mock()
-mock_st.cache_resource.return_value = lambda func: func  # Return function unmodified
+
+# Create proper context manager mocks
+mock_st.container = MockStreamlitContainer()
+mock_st.spinner = MockStreamlitSpinner()
+mock_st.expander = MockStreamlitExpander()
+
+# Create proper cache_resource mock
+mock_st.cache_resource = MockCacheResource()
+
+# Add other streamlit methods
+mock_st.error = Mock()
+mock_st.info = Mock()
+mock_st.success = Mock()
+mock_st.warning = Mock()
+mock_st.markdown = Mock()
+mock_st.text = Mock()
+mock_st.title = Mock()
+mock_st.header = Mock()
+mock_st.subheader = Mock()
+
+sys.modules['streamlit'] = mock_st
 
 # Patch streamlit before importing app
 with patch.dict('sys.modules', {'streamlit': mock_st}):

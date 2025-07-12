@@ -187,3 +187,102 @@ class PerformanceTestHelpers:
             return process.memory_info().rss / 1024 / 1024
         except ImportError:
             return None 
+
+class StreamlitMockHelper:
+    """Helper class to create consistent streamlit mocks across test files"""
+    
+    @staticmethod
+    def create_streamlit_mocks():
+        """Create standardized streamlit mocks for testing"""
+        from unittest.mock import Mock
+        import sys
+        
+        # Create context manager mock classes
+        class MockStreamlitContainer:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                pass
+            def container(self):
+                return MockStreamlitContainer()
+            def empty(self):
+                return MockStreamlitContainer()
+            def __call__(self):
+                return MockStreamlitContainer()
+        
+        class MockStreamlitSpinner:
+            def __init__(self, text=""):
+                self.text = text
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                pass
+            def __call__(self, text=""):
+                return MockStreamlitSpinner(text)
+        
+        class MockStreamlitExpander:
+            def __init__(self, label=""):
+                self.label = label
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                pass
+            def __call__(self, label=""):
+                return MockStreamlitExpander(label)
+        
+        class MockCacheResource:
+            def __call__(self, func=None, **kwargs):
+                if func is None:
+                    return lambda f: f
+                else:
+                    return func
+            def clear(self):
+                pass
+        
+        # Create main mock object
+        mock_st = Mock()
+        
+        # Setup context manager mocks
+        mock_st.container = MockStreamlitContainer()
+        mock_st.spinner = MockStreamlitSpinner()
+        mock_st.expander = MockStreamlitExpander()
+        mock_st.cache_resource = MockCacheResource()
+        
+        # Setup basic streamlit methods
+        for method in [
+            'error', 'info', 'success', 'warning', 'markdown', 'text', 'title', 
+            'header', 'subheader', 'button', 'download_button', 'file_uploader', 
+            'selectbox', 'image', 'stop', 'set_page_config', 'balloons', 'rerun'
+        ]:
+            setattr(mock_st, method, Mock())
+        
+        # Setup complex methods
+        mock_st.sidebar = Mock()
+        mock_st.columns = Mock(side_effect=lambda x: [Mock() for _ in range(x)])
+        mock_st.session_state = {}
+        
+        return mock_st
+    
+    @staticmethod
+    def setup_all_mocks():
+        """Setup all required mocks for testing environment"""
+        import sys
+        from unittest.mock import Mock
+        
+        # Mock problematic imports
+        mock_modules = {
+            'cv2': Mock(),
+            'onnxruntime': Mock(), 
+            'azure.storage.blob': Mock(),
+            'azure.identity': Mock(),
+            'dotenv': Mock()
+        }
+        
+        for module_name, mock_module in mock_modules.items():
+            sys.modules[module_name] = mock_module
+        
+        # Setup streamlit mock
+        mock_st = StreamlitMockHelper.create_streamlit_mocks()
+        sys.modules['streamlit'] = mock_st
+        
+        return mock_st 
