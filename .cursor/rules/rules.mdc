@@ -1,0 +1,34 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+---
+description: General project standards for architecture, code, testing, and AI behavior.
+globs: 
+alwaysApply: true
+---
+
+### Project Awareness & Context
+- Always read `OVERVIEW.md` at the start of a new conversation to understand the project's architecture, goals, style, and constraints.
+- Check `TASKS.md` before starting a new task. If the task isn’t listed, add it with a brief description.
+- Use consistent naming conventions, file structure, and architecture patterns as described in `OVERVIEW.md`.
+- For local development, we are working in a Windows machine, so command line instructions need to be given in Powershell syntax.
+- For local development, assume there are .env files you cannot see or edit, so instructions need to be given to the user when making changes to these variables.
+
+### Code Structure & Modularity
+- Organize code into clearly separated modules, grouped by feature or responsibility.
+- Never create a file longer than 800 lines. Refactor by splitting into modules if needed.
+- Any shortcomings, bugs, or problems detected in the code being tested should be fixed immediately.
+- Avoid adding unnecessary functionalities or dependencies. Remember: simpler is better!
+
+### Task Completion
+- Mark completed tasks in `TASKS.md` immediately.
+- Add new sub-tasks or TODOs discovered during development to `TASK.md`.
+- Don't apologize for errors—fix them. If code is incomplete, add TODO comments instead.
+
+### Behavior Rules
+- Never assume missing context. Ask questions if uncertain.
+- Never hallucinate libraries or functions; only use verified packages.
+- Always confirm file paths and module names exist before referencing.
+- Never delete or overwrite existing code unless explicitly instructed or if part of a task from `TASK.md`.

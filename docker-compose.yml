@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  backend:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DEBUG=true
+      - ENVIRONMENT=development
+      - FUNCTIONS_BASE_URL=http://functions:7071
+    env_file:
+      - .env
+    volumes:
+      - ./backend:/app
+      - /app/venv
+    depends_on:
+      - azurite
+    networks:
+      - fondastic-network
+
+  frontend:
+    build: 
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+      - CHOKIDAR_USEPOLLING=true
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    networks:
+      - fondastic-network
+
+  functions:
+    build: 
+      context: ./functions
+      dockerfile: Dockerfile.dev
+    ports:
+      - "7071:7071"
+    environment:
+      - AzureWebJobsStorage=UseDevelopmentStorage=true
+      - AZURE_FUNCTIONS_ENVIRONMENT=Development
+    env_file:
+      - .env
+    volumes:
+      - ./functions:/home/site/wwwroot
+    depends_on:
+      - azurite
+    networks:
+      - fondastic-network
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    command: "azurite --blobHost 0.0.0.0 --blobPort 10000 --queueHost 0.0.0.0 --queuePort 10001 --tableHost 0.0.0.0 --tablePort 10002 --location /workspace --debug /workspace/debug.log"
+    ports:
+      - "10000:10000"  # Blob service
+      - "10001:10001"  # Queue service  
+      - "10002:10002"  # Table service
+    volumes:
+      - azurite_data:/workspace
+    networks:
+      - fondastic-network
+
+volumes:
+  azurite_data:
+
+networks:
+  fondastic-network:
+    driver: bridge 
