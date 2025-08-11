@@ -176,28 +176,34 @@ PROCESSING_TIMEOUT_SECONDS=30
 
 ### Local Development Setup
 
-1. **Backend Development**
-```bash
-cd backend
-pip install -r requirements.txt
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
+1. **Run locally on Windows (PowerShell) - 3 terminals**
 
-2. **Frontend Development**
-```bash
-cd frontend
-npm install
-npm start
-# Runs on http://localhost:3000
-```
+   Terminal A — Azure Functions (http://localhost:7071)
+   ```powershell
+   cd D:\fondastic\functions
+   python -m pip install -r requirements.txt
+   func start --port 7071
+   ```
 
-3. **Azure Functions Development**
-```bash
-cd functions
-pip install -r requirements.txt
-func start --port 7071
-# Runs on http://localhost:7071
-```
+   Terminal B — Backend (http://localhost:8000)
+   ```powershell
+   cd D:\fondastic\backend
+   .\venv\Scripts\Activate.ps1
+   uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+   ```
+
+   Terminal C — Frontend (http://localhost:5173)
+   ```powershell
+   cd D:\fondastic\frontend
+   npm install
+   $env:VITE_API_URL="http://localhost:8000"
+   npm run dev
+   ```
+
+   CORS: Ensure backend allows Vite origin. In `backend/.env`, include:
+   ```env
+   ALLOWED_ORIGINS=["http://localhost:5173","http://127.0.0.1:5173"]
+   ```
 
 4. **Full Stack with Docker**
 ```bash

@@ -32,3 +32,4 @@ alwaysApply: true
 - Never hallucinate libraries or functions; only use verified packages.
 - Always confirm file paths and module names exist before referencing.
 - Never delete or overwrite existing code unless explicitly instructed or if part of a task from `TASK.md`.
+- Assume environment variables defined for development live in a .env file at the project's root folder that is not visible for you. Edits to this file cannot be done directly, but through instructions to the user.

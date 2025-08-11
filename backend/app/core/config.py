@@ -1,12 +1,18 @@
 from pydantic_settings import BaseSettings
 from typing import List
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load env from project root .env (and keep OS env precedence)
+project_root_env = Path(__file__).resolve().parents[3] / ".env"
+load_dotenv(project_root_env, override=False)
 
 class Settings(BaseSettings):
     # Application
     DEBUG: bool = True
     LOG_LEVEL: str = "DEBUG"
     ENVIRONMENT: str = "development"
-    ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    ALLOWED_ORIGINS: List[str] = []
     
     # Azure
     AZURE_STORAGE_ACCOUNT_NAME: str = ""
@@ -16,7 +22,7 @@ class Settings(BaseSettings):
     AZURE_SUBSCRIPTION_ID: str = ""
     
     # Functions
-    FUNCTIONS_BASE_URL: str = "http://localhost:7071"
+    FUNCTIONS_BASE_URL: str = ""
     
     # ML Configuration
     MODEL_CONTAINER_NAME: str = "models"
