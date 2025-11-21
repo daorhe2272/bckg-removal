@@ -1,0 +1,1 @@
+To understand the project, please read the files OVERVIEW.md and .cursor/rules/rules.mdc

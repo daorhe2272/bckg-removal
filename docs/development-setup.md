@@ -106,7 +106,7 @@ brew install azure-cli
 curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 ```
 
-### 5. Azure Functions Core Tools
+### 5. Azure Functions Deployment
 
 #### All Platforms
 ```bash
@@ -148,7 +148,7 @@ AZURE_SUBSCRIPTION_ID=your_subscription_id
 # Application Configuration
 ENVIRONMENT=development
 API_BASE_URL=http://localhost:8000
-FUNCTIONS_BASE_URL=http://localhost:7071
+FUNCTIONS_BASE_URL=your_azure_functions_url
 
 # ML Configuration
 MODEL_CONTAINER_NAME=models
@@ -174,7 +174,7 @@ AZURE_SUBSCRIPTION_ID=
 # Application Configuration
 ENVIRONMENT=development
 API_BASE_URL=http://localhost:8000
-FUNCTIONS_BASE_URL=http://localhost:7071
+FUNCTIONS_BASE_URL=your_azure_functions_url
 
 # ML Configuration
 MODEL_CONTAINER_NAME=models
@@ -375,7 +375,7 @@ class Settings(BaseSettings):
     AZURE_SUBSCRIPTION_ID: str
     
     # Functions
-    FUNCTIONS_BASE_URL: str = "http://localhost:7071"
+    FUNCTIONS_BASE_URL: str
     
     # ML Configuration
     MODEL_CONTAINER_NAME: str = "models"
