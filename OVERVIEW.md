@@ -156,8 +156,8 @@ Azure Blob Storage                   │
 ### **6.1 Local Development**
 - **Frontend**: React dev server (localhost:3000)
 - **Backend**: FastAPI with hot reload (localhost:8000)
-- **Functions**: Azure Functions Core Tools (localhost:7071)
-- **Storage**: Azurite emulator for local blob storage
+- **Functions**: Azure Functions deployment needed
+- **Storage**: Azure Blob Storage
 
 ### **6.2 Testing Strategy**
 - **Frontend**: Jest + React Testing Library

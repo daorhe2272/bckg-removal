@@ -61,7 +61,6 @@ Fondastic is a professional background removal service optimized for low-volume 
 - **Node.js 18+** - Frontend development
 - **Docker Desktop** - Containerization
 - **Azure CLI** - Cloud resource management
-- **Azure Functions Core Tools** - Local Functions development
 
 ### Azure Resources
 - **Azure Subscription** - With sufficient credits/quota
@@ -117,7 +116,7 @@ AZURE_SUBSCRIPTION_ID=your_subscription_id
 # Application Configuration
 ENVIRONMENT=development
 API_BASE_URL=http://localhost:8000
-FUNCTIONS_BASE_URL=http://localhost:7071
+FUNCTIONS_BASE_URL=your_azure_functions_url
 
 # ML Configuration
 MODEL_CONTAINER_NAME=models
@@ -176,16 +175,9 @@ PROCESSING_TIMEOUT_SECONDS=30
 
 ### Local Development Setup
 
-1. **Run locally on Windows (PowerShell) - 3 terminals**
+1. **Run locally on Windows (PowerShell) - 2 terminals**
 
-   Terminal A — Azure Functions (http://localhost:7071)
-   ```powershell
-   cd D:\fondastic\functions
-   python -m pip install -r requirements.txt
-   func start --port 7071
-   ```
-
-   Terminal B — Backend (http://localhost:8000)
+   Terminal A — Backend (http://localhost:8000)
    ```powershell
    cd D:\fondastic\backend
    .\venv\Scripts\Activate.ps1
